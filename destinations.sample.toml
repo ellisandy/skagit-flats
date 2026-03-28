@@ -1,0 +1,21 @@
+# skagit-flats sample destinations configuration
+# Copy to destinations.toml and edit for your trips.
+# This file is written by the web UI (POST /destinations) and also by hand.
+
+[[destinations]]
+name = "Skagit Flats Loop"
+
+[destinations.criteria]
+min_temp_f = 45.0
+max_temp_f = 85.0
+max_precip_in = 0.1
+max_river_level_ft = 12.0
+road_open_required = true
+
+[[destinations]]
+name = "Baker Lake"
+
+[destinations.criteria]
+min_temp_f = 40.0
+max_river_level_ft = 15.0
+road_open_required = true

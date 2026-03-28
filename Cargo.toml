@@ -1,0 +1,36 @@
+[package]
+name = "skagit-flats"
+version = "0.1.0"
+edition = "2021"
+description = "E-ink dashboard daemon for the Skagit Valley"
+license = "MIT"
+
+[features]
+default = []
+# Enable the SPI hardware display driver (Raspberry Pi only)
+hardware = ["rppal"]
+
+[dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Web framework (tokio runtime isolated to one thread in app)
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Image output for web preview PNG
+image = { version = "0.24", default-features = false, features = ["png"] }
+
+# Raspberry Pi SPI/GPIO — optional, only needed for hardware mode
+rppal = { version = "0.17", optional = true }
+
+# Error handling
+thiserror = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

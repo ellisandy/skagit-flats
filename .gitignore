@@ -1,0 +1,5 @@
+/target/
+
+# User-edited config files (only samples are committed)
+config.toml
+destinations.toml
