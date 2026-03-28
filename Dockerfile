@@ -2,7 +2,7 @@
 # Final image runs the daemon in --no-hardware mode (no Pi hardware needed).
 
 # --- Build stage ---
-FROM rust:1.77-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
