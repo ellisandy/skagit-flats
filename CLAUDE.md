@@ -185,15 +185,19 @@ When your work is done, follow this checklist — **step 4 is REQUIRED**:
 ⚠️ **DO NOT commit if lint or tests fail. Fix issues first.**
 
 ```
-[ ] 1. Run quality gates (ALL must pass):
-       - Rust projects: cargo test && cargo clippy -- -D warnings
-       - npm projects:  npm run lint && npm run format && npm test
-       - Go projects:   go test ./... && go vet ./...
-[ ] 2. Verify Docker build: docker build -t skagit-flats:local .
-       This catches Cargo.lock version mismatches, missing deps, etc.
-[ ] 3. Stage changes:     git add <files>
-[ ] 4. Commit changes:    git commit -m "msg (issue-id)"
-[ ] 5. Self-clean:        gt done   ← MANDATORY FINAL STEP
+[ ] 1. Run ALL tests (unit + integration):
+       cargo test
+       This runs unit tests (domain, config, presentation) and
+       integration tests (axum endpoints, render pipeline).
+       Live source tests are skipped unless LIVE_TESTS=1.
+[ ] 2. Run clippy with deny warnings:
+       cargo clippy -- -D warnings
+[ ] 3. Verify Docker build:
+       docker build -t skagit-flats:local .
+       Catches Cargo.lock version mismatches, missing deps, etc.
+[ ] 4. Stage changes:     git add <files>
+[ ] 5. Commit changes:    git commit -m "msg (issue-id)"
+[ ] 6. Self-clean:        gt done   ← MANDATORY FINAL STEP
 ```
 
 **Quality gates are not optional.** Worktrees may not trigger pre-commit hooks,
