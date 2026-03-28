@@ -1,0 +1,12 @@
+services:
+  skagit-flats:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.sample.toml:/etc/skagit-flats/config.toml:ro
+      - ./destinations.sample.toml:/etc/skagit-flats/destinations.toml:ro
+    environment:
+      - SKAGIT_NO_HARDWARE=1
+      - SKAGIT_FIXTURE_DATA=1
+      - RUST_LOG=info
