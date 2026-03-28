@@ -186,11 +186,14 @@ When your work is done, follow this checklist — **step 4 is REQUIRED**:
 
 ```
 [ ] 1. Run quality gates (ALL must pass):
-       - npm projects: npm run lint && npm run format && npm test
-       - Go projects:  go test ./... && go vet ./...
-[ ] 2. Stage changes:     git add <files>
-[ ] 3. Commit changes:    git commit -m "msg (issue-id)"
-[ ] 4. Self-clean:        gt done   ← MANDATORY FINAL STEP
+       - Rust projects: cargo test && cargo clippy -- -D warnings
+       - npm projects:  npm run lint && npm run format && npm test
+       - Go projects:   go test ./... && go vet ./...
+[ ] 2. Verify Docker build: docker build -t skagit-flats:local .
+       This catches Cargo.lock version mismatches, missing deps, etc.
+[ ] 3. Stage changes:     git add <files>
+[ ] 4. Commit changes:    git commit -m "msg (issue-id)"
+[ ] 5. Self-clean:        gt done   ← MANDATORY FINAL STEP
 ```
 
 **Quality gates are not optional.** Worktrees may not trigger pre-commit hooks,
