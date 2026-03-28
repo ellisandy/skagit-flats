@@ -244,4 +244,133 @@ road_open_required = true
         let cfg = load_destinations(f.path()).expect("empty file is valid");
         assert!(cfg.destinations.is_empty());
     }
+
+    #[test]
+    fn config_missing_file_returns_read_error() {
+        let result = load_config(Path::new("/nonexistent/config.toml"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::Read { path, .. } => {
+                assert!(path.contains("nonexistent"));
+            }
+            other => panic!("expected Read error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn destinations_missing_file_returns_read_error() {
+        let result = load_destinations(Path::new("/nonexistent/destinations.toml"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConfigError::Read { path, .. } => {
+                assert!(path.contains("nonexistent"));
+            }
+            other => panic!("expected Read error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn config_uses_default_trail_interval() {
+        let toml = r#"
+[display]
+width = 800
+height = 480
+
+[location]
+latitude = 48.4
+longitude = -122.3
+name = "Test"
+
+[sources]
+weather_interval_secs = 300
+river_interval_secs = 300
+ferry_interval_secs = 60
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_config(f.path()).expect("should parse");
+        assert_eq!(cfg.sources.trail_interval_secs, 900);
+        assert_eq!(cfg.sources.road_interval_secs, 1800);
+    }
+
+    #[test]
+    fn config_optional_source_configs_default_to_none() {
+        let toml = r#"
+[display]
+width = 800
+height = 480
+
+[location]
+latitude = 48.4
+longitude = -122.3
+name = "Test"
+
+[sources]
+weather_interval_secs = 300
+river_interval_secs = 300
+ferry_interval_secs = 60
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_config(f.path()).expect("should parse");
+        assert!(cfg.sources.river.is_none());
+        assert!(cfg.sources.trail.is_none());
+        assert!(cfg.sources.road.is_none());
+        assert!(cfg.sources.ferry.is_none());
+    }
+
+    #[test]
+    fn destinations_multiple_entries() {
+        let toml = r#"
+[[destinations]]
+name = "Loop A"
+[destinations.criteria]
+min_temp_f = 40.0
+road_open_required = true
+
+[[destinations]]
+name = "Loop B"
+[destinations.criteria]
+max_river_level_ft = 15.0
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_destinations(f.path()).expect("should parse");
+        assert_eq!(cfg.destinations.len(), 2);
+        assert_eq!(cfg.destinations[0].name, "Loop A");
+        assert!(cfg.destinations[0].criteria.road_open_required);
+        assert_eq!(cfg.destinations[1].name, "Loop B");
+        assert_eq!(cfg.destinations[1].criteria.max_river_level_ft, Some(15.0));
+    }
+
+    #[test]
+    fn destinations_config_serialization_roundtrip() {
+        let config = DestinationsConfig {
+            destinations: vec![Destination {
+                name: "Test".to_string(),
+                criteria: crate::domain::TripCriteria {
+                    min_temp_f: Some(45.0),
+                    max_temp_f: Some(85.0),
+                    road_open_required: true,
+                    ..Default::default()
+                },
+            }],
+        };
+        let toml_str = toml::to_string_pretty(&config).expect("should serialize");
+        let parsed: DestinationsConfig = toml::from_str(&toml_str).expect("should parse");
+        assert_eq!(parsed.destinations.len(), 1);
+        assert_eq!(parsed.destinations[0].name, "Test");
+        assert_eq!(parsed.destinations[0].criteria.min_temp_f, Some(45.0));
+    }
+
+    #[test]
+    fn config_error_display() {
+        let err = ConfigError::Read {
+            path: "config.toml".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("config.toml"));
+        assert!(msg.contains("not found"));
+    }
 }
