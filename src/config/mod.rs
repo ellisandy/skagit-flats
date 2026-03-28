@@ -1,0 +1,159 @@
+use crate::domain::TripCriteria;
+use serde::Deserialize;
+use std::path::Path;
+use thiserror::Error;
+
+/// Top-level runtime configuration loaded from config.toml.
+/// This file is never written at runtime; changes require a restart.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Config {
+    pub display: DisplayConfig,
+    pub location: LocationConfig,
+    pub sources: SourceIntervals,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DisplayConfig {
+    /// Display width in pixels (800 for the Waveshare 7.5").
+    pub width: u32,
+    /// Display height in pixels (480 for the Waveshare 7.5").
+    pub height: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LocationConfig {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub name: String,
+}
+
+/// Per-source polling intervals in seconds.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SourceIntervals {
+    pub weather_interval_secs: u64,
+    pub river_interval_secs: u64,
+    pub ferry_interval_secs: u64,
+}
+
+/// Destinations configuration loaded from destinations.toml.
+/// This file is written by the web UI and reloaded at runtime on change.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DestinationsConfig {
+    #[serde(default)]
+    pub destinations: Vec<Destination>,
+}
+
+/// A single trip destination with its go/no-go criteria.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Destination {
+    pub name: String,
+    pub criteria: TripCriteria,
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("failed to read '{path}': {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse '{path}': {source}")]
+    Parse {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+}
+
+/// Load and parse config.toml. Fails fast on any error.
+pub fn load_config(path: &Path) -> Result<Config, ConfigError> {
+    let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })?;
+    toml::from_str(&contents).map_err(|e| ConfigError::Parse {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })
+}
+
+/// Load and parse destinations.toml. Fails fast on any error.
+pub fn load_destinations(path: &Path) -> Result<DestinationsConfig, ConfigError> {
+    let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })?;
+    toml::from_str(&contents).map_err(|e| ConfigError::Parse {
+        path: path.to_string_lossy().into_owned(),
+        source: e,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn parse_valid_config() {
+        let toml = r#"
+[display]
+width = 800
+height = 480
+
+[location]
+latitude = 48.4232
+longitude = -122.3351
+name = "Mount Vernon, WA"
+
+[sources]
+weather_interval_secs = 300
+river_interval_secs = 300
+ferry_interval_secs = 60
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_config(f.path()).expect("should parse");
+        assert_eq!(cfg.display.width, 800);
+        assert_eq!(cfg.display.height, 480);
+        assert_eq!(cfg.location.name, "Mount Vernon, WA");
+        assert_eq!(cfg.sources.ferry_interval_secs, 60);
+    }
+
+    #[test]
+    fn parse_invalid_config_fails_fast() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"[display]\nnot valid toml !!!").unwrap();
+        assert!(load_config(f.path()).is_err());
+    }
+
+    #[test]
+    fn parse_valid_destinations() {
+        let toml = r#"
+[[destinations]]
+name = "Skagit Flats Loop"
+
+[destinations.criteria]
+min_temp_f = 45.0
+max_temp_f = 85.0
+max_river_level_ft = 12.0
+road_open_required = true
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_destinations(f.path()).expect("should parse");
+        assert_eq!(cfg.destinations.len(), 1);
+        assert_eq!(cfg.destinations[0].name, "Skagit Flats Loop");
+        assert!(cfg.destinations[0].criteria.road_open_required);
+    }
+
+    #[test]
+    fn parse_empty_destinations() {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"").unwrap();
+        let cfg = load_destinations(f.path()).expect("empty file is valid");
+        assert!(cfg.destinations.is_empty());
+    }
+}
