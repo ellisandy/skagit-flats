@@ -42,6 +42,15 @@ Key invariants:
 2. Check `docs/architecture/overview.md` — understand where your change fits
 3. Check `bd ready` for existing issues before creating new ones
 
+### Running locally without hardware
+
+Use `--no-hardware` (or `SKAGIT_NO_HARDWARE=1`) to disable the SPI display
+driver. The web preview is the only output. A `docker compose up` at the repo
+root starts the full stack on port 8080.
+
+Set `SKAGIT_FIXTURE_DATA=1` to use static fixture responses instead of live
+API calls — useful for UI work and CI.
+
 ### Source trait
 
 Every data source must implement the `Source` trait (defined in `src/sources/mod.rs`).
@@ -100,6 +109,9 @@ absolutely necessary — cross-compilation becomes significantly harder.
 - Do not add a source by modifying the core scheduler or render loop — use the
   `Source` trait
 - Do not add authentication or cloud sync — these are explicit non-goals
+- Do not put trip evaluation logic in `presentation` or `sources` — it belongs
+  in the `evaluation` layer, which takes `TripCriteria` + domain state and returns
+  a `TripDecision`
 - Do not add forecast data — current conditions only
 - Do not use `unwrap()` or `expect()` in any path that runs on the Pi
 - Do not introduce async runtimes (Tokio, async-std) without discussing first —
@@ -112,6 +124,10 @@ absolutely necessary — cross-compilation becomes significantly harder.
 
 - Trail/campsite data source: WTA, Recreation.gov, and USFS have no unified API.
   The approach is TBD — likely scraping or a thin aggregator.
+- Road closure coverage: WSDOT covers state roads; USFS and county road APIs
+  have inconsistent coverage. Approach TBD.
+- Go/no-go criteria storage: per-destination thresholds in config.toml vs. a
+  separate destinations file — not yet decided.
 - Config reload mechanism: SIGHUP vs. file watcher — not yet decided.
 - Web framework: no decision made; keep it minimal (no heavy frontend framework).
 
