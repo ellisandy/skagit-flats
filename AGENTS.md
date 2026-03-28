@@ -51,6 +51,25 @@ root starts the full stack on port 8080.
 Set `SKAGIT_FIXTURE_DATA=1` to use static fixture responses instead of live
 API calls — useful for UI work and CI.
 
+### Web framework: axum
+
+The `web` layer uses **axum**. When adding endpoints:
+- Define handler functions with typed axum extractors (`Json<T>`, `Path<T>`, `State<T>`)
+- Register routes in the axum `Router` in `src/web/mod.rs`
+- Shared state is passed via `axum::extract::State` — do not use global statics
+- The tokio runtime is started once in `app`; do not start additional runtimes
+
+### Configuration files
+
+| File | Purpose | Who writes it |
+|------|---------|--------------|
+| `config.toml` | Hardware, display geometry, location, source intervals | Human/agent only — never written at runtime |
+| `destinations.toml` | Destinations and go/no-go criteria | Web UI (`POST /destinations`) and human/agent editing |
+
+When adding destination or criteria logic, edit `destinations.toml` schema and
+the `DestinationsConfig` struct in `src/config/mod.rs`. Do not add destination
+fields to `config.toml`.
+
 ### Source trait
 
 Every data source must implement the `Source` trait (defined in `src/sources/mod.rs`).
@@ -123,13 +142,11 @@ absolutely necessary — cross-compilation becomes significantly harder.
 ## Open questions (as of initial design)
 
 - Trail/campsite data source: WTA, Recreation.gov, and USFS have no unified API.
-  The approach is TBD — likely scraping or a thin aggregator.
+  The approach is TBD — a spike is required before implementation.
 - Road closure coverage: WSDOT covers state roads; USFS and county road APIs
   have inconsistent coverage. Approach TBD.
-- Go/no-go criteria storage: per-destination thresholds in config.toml vs. a
-  separate destinations file — not yet decided.
-- Config reload mechanism: SIGHUP vs. file watcher — not yet decided.
-- Web framework: no decision made; keep it minimal (no heavy frontend framework).
+- Font: embedded bitmap vs. runtime loaded — not yet decided.
+- Partial refresh granularity: per-panel vs. full buffer — not yet decided.
 
 ---
 
