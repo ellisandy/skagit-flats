@@ -4,6 +4,8 @@ use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::evaluate;
 use crate::presentation::build_panels;
 use crate::render::render_panels;
+use crate::sources::noaa::NoaaSource;
+use crate::sources::Source;
 use crate::web;
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
@@ -131,30 +133,40 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
         log::info!("fixture-data mode: sources will return static responses");
     }
 
-    // The sender is cloned and passed to source threads in later waves.
     let (tx, rx) = mpsc::channel::<DataPoint>();
+
+    // Spawn NOAA weather source thread.
+    let noaa = NoaaSource::new(&config.location, config.sources.weather_interval_secs);
+    spawn_source(noaa, tx.clone());
+
+    // Drop the original sender so the channel closes when all source threads exit.
     drop(tx);
 
-    // Stub: initial render with empty state
-    let state = DomainState::default();
+    // Initial render with empty state.
+    let mut state = DomainState::default();
     let panels = build_panels(&state);
     let buf = render_panels(&panels, config.display.width, config.display.height);
     if let Err(e) = display.update(&buf, RefreshMode::Full) {
         log::error!("display update failed: {e}");
     }
 
-    // Log destination decisions against empty state
+    // Log destination decisions against empty state.
     for dest in &destinations.destinations {
         let decision = evaluate(dest, &state);
         log::info!("destination '{}': {:?}", dest.name, decision);
     }
 
     // Main loop — blocks until all source threads exit (channel closes).
-    log::info!("entering main loop (stub — no sources registered yet)");
+    log::info!("entering main loop");
     loop {
         match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(_point) => {
-                // Future waves: apply point to state, re-render, push to display
+            Ok(point) => {
+                state.apply(point);
+                let panels = build_panels(&state);
+                let buf = render_panels(&panels, config.display.width, config.display.height);
+                if let Err(e) = display.update(&buf, RefreshMode::Full) {
+                    log::error!("display update failed: {e}");
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 log::debug!("heartbeat tick");
@@ -165,6 +177,35 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
             }
         }
     }
+}
+
+/// Spawn a source on a dedicated thread. The source fetches data in a loop at
+/// its configured refresh interval, sending results over the channel.
+fn spawn_source(source: impl Source + 'static, tx: mpsc::Sender<DataPoint>) {
+    let name = source.name().to_string();
+    let interval = source.refresh_interval();
+
+    thread::Builder::new()
+        .name(format!("source-{}", name))
+        .spawn(move || {
+            log::info!("source '{}' started (interval: {:?})", name, interval);
+            loop {
+                match source.fetch() {
+                    Ok(point) => {
+                        log::debug!("source '{}' fetched successfully", name);
+                        if tx.send(point).is_err() {
+                            log::info!("source '{}' channel closed, exiting", name);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("source '{}' fetch failed: {}", name, e);
+                    }
+                }
+                thread::sleep(interval);
+            }
+        })
+        .expect("failed to spawn source thread");
 }
 
 /// Start the axum web server on a dedicated thread with its own tokio runtime.
