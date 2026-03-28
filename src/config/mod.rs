@@ -33,6 +33,28 @@ pub struct SourceIntervals {
     pub weather_interval_secs: u64,
     pub river_interval_secs: u64,
     pub ferry_interval_secs: u64,
+    #[serde(default = "default_trail_interval")]
+    pub trail_interval_secs: u64,
+    #[serde(default)]
+    pub trail: Option<TrailSourceConfig>,
+}
+
+fn default_trail_interval() -> u64 {
+    900
+}
+
+/// Configuration for the trail conditions source (NPS Alerts API).
+#[derive(Debug, Deserialize, Clone)]
+pub struct TrailSourceConfig {
+    /// NPS park code, e.g. "noca" for North Cascades. Defaults to "noca".
+    #[serde(default = "default_park_code")]
+    pub park_code: String,
+    /// NPS API key. If absent, falls back to NPS_API_KEY env var.
+    pub nps_api_key: Option<String>,
+}
+
+fn default_park_code() -> String {
+    "noca".to_string()
 }
 
 /// Destinations configuration loaded from destinations.toml.
@@ -112,6 +134,10 @@ name = "Mount Vernon, WA"
 weather_interval_secs = 300
 river_interval_secs = 300
 ferry_interval_secs = 60
+trail_interval_secs = 900
+
+[sources.trail]
+park_code = "noca"
 "#;
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(toml.as_bytes()).unwrap();

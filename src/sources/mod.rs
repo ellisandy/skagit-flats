@@ -1,3 +1,5 @@
+pub mod trail_conditions;
+
 use crate::domain::DataPoint;
 use std::time::Duration;
 use thiserror::Error;
