@@ -16,7 +16,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let _web = start_web_server(&config, &opts);
+    let (_web_handle, shared) = start_web_server(&config, &opts, &destinations);
 
-    run(opts, config, destinations);
+    run(opts, config, destinations, shared);
 }

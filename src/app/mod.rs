@@ -20,6 +20,16 @@ pub struct SharedState {
     pub pixel_buffer: RwLock<crate::render::PixelBuffer>,
     /// Source status information for the /sources endpoint.
     pub source_statuses: RwLock<Vec<SourceStatus>>,
+    /// Current destinations configuration (editable via web UI).
+    pub destinations_config: RwLock<DestinationsConfig>,
+    /// Current domain state for trip evaluation.
+    pub domain_state: RwLock<DomainState>,
+    /// Path to destinations.toml for persistence.
+    pub destinations_path: std::path::PathBuf,
+    /// Display dimensions for re-rendering.
+    pub display_width: u32,
+    /// Display height for re-rendering.
+    pub display_height: u32,
 }
 
 /// Status of a single data source, exposed via GET /sources.
@@ -114,7 +124,16 @@ impl AppOptions {
 }
 
 /// Run the skagit-flats daemon until a shutdown signal is received.
-pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
+///
+/// The `shared` parameter is the same Arc<SharedState> held by the web server,
+/// allowing the main loop to update the pixel buffer and domain state visible
+/// to web endpoints.
+pub fn run(
+    opts: AppOptions,
+    config: Config,
+    destinations: DestinationsConfig,
+    shared: Arc<SharedState>,
+) {
     log::info!("skagit-flats starting");
     log::info!(
         "location: {} ({}, {})",
@@ -160,17 +179,28 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
     // Drop the original sender so the channel closes when all source threads exit.
     drop(tx);
 
-    // Initial render with empty state.
-    let mut state = DomainState::default();
-    let panels = build_panels_with_destinations(&state, &destinations.destinations);
+    // Spawn file watcher for destinations.toml.
+    spawn_destinations_watcher(opts.destinations_path.clone(), Arc::clone(&shared));
+
+    // Initial render with destinations.
+    let panels = build_panels_with_destinations(
+        &DomainState::default(),
+        &destinations.destinations,
+    );
     let buf = render_panels(&panels, config.display.width, config.display.height);
     if let Err(e) = display.update(&buf, RefreshMode::Full) {
         log::error!("display update failed: {e}");
     }
 
+    // Update shared pixel buffer with initial render.
+    {
+        let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
+        *pb = buf;
+    }
+
     // Log destination decisions against current state.
     for dest in &destinations.destinations {
-        let decision = evaluate(dest, &state);
+        let decision = evaluate(dest, &DomainState::default());
         log::info!("destination '{}': {:?}", dest.name, decision);
     }
 
@@ -179,12 +209,27 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
     loop {
         match rx.recv_timeout(Duration::from_secs(60)) {
             Ok(point) => {
-                state.apply(point);
-                let panels = build_panels(&state);
+                // Update shared domain state.
+                {
+                    let mut ds = shared.domain_state.write().expect("domain_state lock poisoned");
+                    ds.apply(point);
+                }
+
+                // Re-render with current destinations.
+                let domain = shared.domain_state.read().expect("domain_state lock poisoned");
+                let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
+                let panels = build_panels_with_destinations(&domain, &dests.destinations);
                 let buf = render_panels(&panels, config.display.width, config.display.height);
+                drop(domain);
+                drop(dests);
+
                 if let Err(e) = display.update(&buf, RefreshMode::Full) {
                     log::error!("display update failed: {e}");
                 }
+
+                // Update shared pixel buffer.
+                let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
+                *pb = buf;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 log::debug!("heartbeat tick");
@@ -195,6 +240,78 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
             }
         }
     }
+}
+
+/// Watch destinations.toml for changes and reload when modified.
+///
+/// Uses a simple polling approach (checks mtime every 2 seconds) to avoid
+/// adding a file-watcher dependency like `notify`. Sufficient for a local
+/// config file that changes infrequently.
+fn spawn_destinations_watcher(path: std::path::PathBuf, shared: Arc<SharedState>) {
+    thread::Builder::new()
+        .name("destinations-watcher".to_string())
+        .spawn(move || {
+            let mut last_modified = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            loop {
+                thread::sleep(Duration::from_secs(2));
+
+                let current_modified = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .ok();
+
+                if current_modified != last_modified {
+                    last_modified = current_modified;
+                    log::info!("destinations.toml changed, reloading");
+
+                    match crate::config::load_destinations(&path) {
+                        Ok(new_config) => {
+                            let mut dests = shared
+                                .destinations_config
+                                .write()
+                                .expect("destinations_config lock poisoned");
+                            *dests = new_config;
+                            drop(dests);
+
+                            // Re-render with updated destinations.
+                            let domain = shared
+                                .domain_state
+                                .read()
+                                .expect("domain_state lock poisoned");
+                            let dests = shared
+                                .destinations_config
+                                .read()
+                                .expect("destinations_config lock poisoned");
+                            let panels = build_panels_with_destinations(
+                                &domain,
+                                &dests.destinations,
+                            );
+                            let buf = render_panels(
+                                &panels,
+                                shared.display_width,
+                                shared.display_height,
+                            );
+                            drop(domain);
+                            drop(dests);
+
+                            let mut pb = shared
+                                .pixel_buffer
+                                .write()
+                                .expect("pixel_buffer lock poisoned");
+                            *pb = buf;
+
+                            log::info!("destinations reloaded and display re-rendered");
+                        }
+                        Err(e) => {
+                            log::warn!("failed to reload destinations.toml: {e}");
+                        }
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn destinations watcher thread");
 }
 
 /// Spawn a source on a dedicated thread. The source fetches data in a loop at
@@ -229,12 +346,21 @@ fn spawn_source(source: impl Source + 'static, tx: mpsc::Sender<DataPoint>) {
 /// Start the axum web server on a dedicated thread with its own tokio runtime.
 ///
 /// Returns the JoinHandle and the SharedState (so the main loop can update it).
-pub fn start_web_server(config: &Config, opts: &AppOptions) -> (thread::JoinHandle<()>, Arc<SharedState>) {
+pub fn start_web_server(
+    config: &Config,
+    opts: &AppOptions,
+    destinations: &DestinationsConfig,
+) -> (thread::JoinHandle<()>, Arc<SharedState>) {
     let initial_buf = crate::render::PixelBuffer::new(config.display.width, config.display.height);
 
     let shared = Arc::new(SharedState {
         pixel_buffer: RwLock::new(initial_buf),
         source_statuses: RwLock::new(Vec::new()),
+        destinations_config: RwLock::new(destinations.clone()),
+        domain_state: RwLock::new(DomainState::default()),
+        destinations_path: opts.destinations_path.clone(),
+        display_width: config.display.width,
+        display_height: config.display.height,
     });
 
     let state = Arc::clone(&shared);

@@ -114,14 +114,14 @@ fn default_ferry_route_id() -> u32 {
 
 /// Destinations configuration loaded from destinations.toml.
 /// This file is written by the web UI and reloaded at runtime on change.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone, Default)]
 pub struct DestinationsConfig {
     #[serde(default)]
     pub destinations: Vec<Destination>,
 }
 
 /// A single trip destination with its go/no-go criteria.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, serde::Serialize, Clone)]
 pub struct Destination {
     pub name: String,
     pub criteria: TripCriteria,
