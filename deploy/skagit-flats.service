@@ -1,0 +1,27 @@
+[Unit]
+Description=Skagit Flats e-ink dashboard daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/skagit-flats --config /etc/skagit-flats/config.toml --destinations /etc/skagit-flats/destinations.toml --port 8080
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Run as a dedicated user for security.
+User=skagit-flats
+Group=skagit-flats
+
+# SPI and GPIO access require these supplementary groups.
+SupplementaryGroups=spi gpio
+
+# Hardening.
+ProtectSystem=strict
+ReadWritePaths=/etc/skagit-flats
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

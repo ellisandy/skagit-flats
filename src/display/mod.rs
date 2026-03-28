@@ -1,3 +1,6 @@
+#[cfg(feature = "hardware")]
+pub mod waveshare;
+
 use crate::render::PixelBuffer;
 use thiserror::Error;
 

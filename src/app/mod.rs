@@ -146,8 +146,23 @@ pub fn run(
         log::info!("no-hardware mode: using NullDisplay");
         Box::new(NullDisplay)
     } else {
-        log::info!("hardware mode: NullDisplay (SPI driver not yet implemented)");
-        Box::new(NullDisplay)
+        #[cfg(feature = "hardware")]
+        {
+            log::info!("hardware mode: initializing Waveshare SPI display");
+            match crate::display::waveshare::WaveshareDisplay::new() {
+                Ok(d) => Box::new(d),
+                Err(e) => {
+                    log::error!("failed to initialize hardware display: {e}");
+                    log::warn!("falling back to NullDisplay");
+                    Box::new(NullDisplay)
+                }
+            }
+        }
+        #[cfg(not(feature = "hardware"))]
+        {
+            log::info!("hardware mode: built without 'hardware' feature, using NullDisplay");
+            Box::new(NullDisplay)
+        }
     };
 
     if opts.fixture_data {
@@ -205,8 +220,31 @@ pub fn run(
     }
 
     // Main loop — blocks until all source threads exit (channel closes).
+    // Hourly full refresh clears e-ink ghosting; data updates use partial refresh.
     log::info!("entering main loop");
+    let full_refresh_interval = Duration::from_secs(3600);
+    let mut last_full_refresh = std::time::Instant::now();
+
     loop {
+        // Check if an hourly full refresh is due.
+        let needs_full = last_full_refresh.elapsed() >= full_refresh_interval;
+        if needs_full {
+            log::info!("hourly full refresh to clear ghosting");
+            let domain = shared.domain_state.read().expect("domain_state lock poisoned");
+            let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
+            let panels = build_panels_with_destinations(&domain, &dests.destinations);
+            let buf = render_panels(&panels, config.display.width, config.display.height);
+            drop(domain);
+            drop(dests);
+
+            if let Err(e) = display.update(&buf, RefreshMode::Full) {
+                log::error!("full refresh failed: {e}");
+            }
+            let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
+            *pb = buf;
+            last_full_refresh = std::time::Instant::now();
+        }
+
         match rx.recv_timeout(Duration::from_secs(60)) {
             Ok(point) => {
                 // Update shared domain state.
@@ -223,8 +261,9 @@ pub fn run(
                 drop(domain);
                 drop(dests);
 
-                if let Err(e) = display.update(&buf, RefreshMode::Full) {
-                    log::error!("display update failed: {e}");
+                // Use partial refresh for data updates (fast, ~0.3s).
+                if let Err(e) = display.update(&buf, RefreshMode::Partial) {
+                    log::error!("partial refresh failed: {e}");
                 }
 
                 // Update shared pixel buffer.

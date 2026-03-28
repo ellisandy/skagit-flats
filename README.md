@@ -128,10 +128,59 @@ refresh_interval_secs = 120
 cargo build --release
 ```
 
-Cross-compile for Raspberry Pi (from x86):
+Cross-compile for Raspberry Pi with SPI hardware support:
 
 ```sh
-cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu --features hardware
+```
+
+---
+
+## Deploying to Raspberry Pi
+
+### Prerequisites
+
+- Raspberry Pi Zero 2 W (or any Pi with SPI) running Raspberry Pi OS
+- SPI enabled: `sudo raspi-config` > Interface Options > SPI > Enable
+- SSH access configured
+- Cross-compilation toolchain: `rustup target add aarch64-unknown-linux-gnu`
+
+### First-time setup
+
+```sh
+# Install the systemd service, create the user, and enable on boot.
+make install-service PI_HOST=pi@your-pi.local
+```
+
+This creates a `skagit-flats` system user with SPI/GPIO group access,
+installs the systemd unit, and enables the service.
+
+### Deploy updates
+
+```sh
+make deploy PI_HOST=pi@your-pi.local
+```
+
+This cross-compiles with the `hardware` feature, rsyncs the binary and
+sample configs (without overwriting existing configs), and restarts the
+service.
+
+### Checking status
+
+```sh
+ssh pi@your-pi.local sudo systemctl status skagit-flats
+ssh pi@your-pi.local sudo journalctl -u skagit-flats -f
+```
+
+The service auto-restarts on crash (`Restart=always`, `RestartSec=5`).
+The web UI is available at `http://your-pi.local:8080`.
+
+### Hardware tests
+
+Run integration tests on the Pi with the display connected:
+
+```sh
+SKAGIT_HARDWARE_TESTS=1 cargo test --features hardware --test hardware_tests
 ```
 
 ---
