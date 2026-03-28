@@ -2,7 +2,7 @@ use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::evaluate;
-use crate::presentation::build_panels;
+use crate::presentation::build_panels_with_destinations;
 use crate::render::render_panels;
 use crate::sources::noaa::NoaaSource;
 use crate::sources::Source;
@@ -144,13 +144,13 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
 
     // Initial render with empty state.
     let mut state = DomainState::default();
-    let panels = build_panels(&state);
+    let panels = build_panels_with_destinations(&state, &destinations.destinations);
     let buf = render_panels(&panels, config.display.width, config.display.height);
     if let Err(e) = display.update(&buf, RefreshMode::Full) {
         log::error!("display update failed: {e}");
     }
 
-    // Log destination decisions against empty state.
+    // Log destination decisions against current state.
     for dest in &destinations.destinations {
         let decision = evaluate(dest, &state);
         log::info!("destination '{}': {:?}", dest.name, decision);

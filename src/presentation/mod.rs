@@ -81,6 +81,15 @@ pub fn format_trip_decision(destination: &str, decision: &TripDecision) -> Panel
 
 /// Build all panels from the current domain state.
 pub fn build_panels(state: &DomainState) -> Vec<Panel> {
+    build_panels_with_destinations(state, &[])
+}
+
+/// Build all panels from the current domain state, including trip decision
+/// panels for each configured destination.
+pub fn build_panels_with_destinations(
+    state: &DomainState,
+    destinations: &[crate::config::Destination],
+) -> Vec<Panel> {
     let mut panels = Vec::new();
     if let Some(w) = &state.weather {
         panels.push(format_weather(w));
@@ -96,6 +105,10 @@ pub fn build_panels(state: &DomainState) -> Vec<Panel> {
     }
     if let Some(r) = &state.road {
         panels.push(format_road(r));
+    }
+    for dest in destinations {
+        let decision = crate::evaluation::evaluate(dest, state);
+        panels.push(format_trip_decision(&dest.name, &decision));
     }
     panels
 }
@@ -121,6 +134,7 @@ mod tests {
             wind_speed_mph: 10.0,
             wind_direction: "SW".to_string(),
             sky_condition: "Mostly Cloudy".to_string(),
+            precip_chance_pct: 0.0,
             observation_time: 0,
         };
         let panel = format_weather(&obs);

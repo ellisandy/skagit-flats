@@ -7,6 +7,9 @@ pub struct WeatherObservation {
     pub wind_speed_mph: f32,
     pub wind_direction: String,
     pub sky_condition: String,
+    /// Probability of precipitation, 0–100.
+    #[serde(default)]
+    pub precip_chance_pct: f32,
     /// Unix timestamp of the observation.
     pub observation_time: u64,
 }
@@ -53,8 +56,9 @@ pub struct RoadStatus {
 pub struct TripCriteria {
     pub min_temp_f: Option<f32>,
     pub max_temp_f: Option<f32>,
-    pub max_precip_in: Option<f32>,
+    pub max_precip_chance_pct: Option<f32>,
     pub max_river_level_ft: Option<f32>,
+    pub max_river_flow_cfs: Option<f32>,
     #[serde(default)]
     pub road_open_required: bool,
 }
