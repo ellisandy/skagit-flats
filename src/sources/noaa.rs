@@ -172,6 +172,7 @@ fn parse_observation(json: &str) -> Result<DataPoint, SourceError> {
         wind_speed_mph: wind_mph as f32,
         wind_direction: wind_dir,
         sky_condition: sky,
+        precip_chance_pct: 0.0,
         observation_time,
     }))
 }

@@ -41,6 +41,8 @@ pub struct SourceIntervals {
     pub trail: Option<TrailSourceConfig>,
     #[serde(default)]
     pub road: Option<RoadSourceConfig>,
+    #[serde(default)]
+    pub ferry: Option<FerrySourceConfig>,
 }
 
 fn default_trail_interval() -> u64 {
@@ -77,6 +79,22 @@ pub struct RoadSourceConfig {
 
 fn default_routes() -> Vec<String> {
     vec!["020".to_string()]
+}
+
+/// Configuration for the WSDOT ferries source.
+#[derive(Debug, Deserialize, Clone)]
+pub struct FerrySourceConfig {
+    /// WSDOT access code. If absent, falls back to WSDOT_ACCESS_CODE env var.
+    pub wsdot_access_code: Option<String>,
+    /// WSDOT route ID. Defaults to 9 (Anacortes / Friday Harbor).
+    #[serde(default = "default_ferry_route_id")]
+    pub route_id: u32,
+    /// Human-readable route description.
+    pub route_description: Option<String>,
+}
+
+fn default_ferry_route_id() -> u32 {
+    9
 }
 
 /// Destinations configuration loaded from destinations.toml.

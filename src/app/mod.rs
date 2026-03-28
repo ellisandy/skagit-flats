@@ -2,9 +2,10 @@ use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::evaluate;
-use crate::presentation::build_panels_with_destinations;
+use crate::presentation::{build_panels, build_panels_with_destinations};
 use crate::render::render_panels;
 use crate::sources::noaa::NoaaSource;
+use crate::sources::wsdot::WsdotFerrySource;
 use crate::sources::Source;
 use crate::web;
 use std::sync::mpsc;
@@ -138,6 +139,12 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
     // Spawn NOAA weather source thread.
     let noaa = NoaaSource::new(&config.location, config.sources.weather_interval_secs);
     spawn_source(noaa, tx.clone());
+
+    // Spawn WSDOT ferries source thread.
+    match WsdotFerrySource::new(config.sources.ferry.as_ref(), config.sources.ferry_interval_secs) {
+        Ok(ferry) => spawn_source(ferry, tx.clone()),
+        Err(e) => log::warn!("WSDOT ferries source disabled: {}", e),
+    }
 
     // Drop the original sender so the channel closes when all source threads exit.
     drop(tx);
