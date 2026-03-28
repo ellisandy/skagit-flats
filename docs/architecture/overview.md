@@ -37,13 +37,20 @@ Data flows in one direction. No layer calls back into an earlier layer.
 
 ### `config`
 
-Loads `config.toml` at startup and owns the runtime configuration. All other
-layers receive a shared reference; they do not read files directly.
+Owns two configuration files with clearly separated responsibilities:
+
+| File | Owns | Written by |
+|------|------|-----------|
+| `config.toml` | Hardware settings, display geometry, location, per-source intervals | Human/agent editing only |
+| `destinations.toml` | Destination definitions + per-destination go/no-go criteria | Web UI (and human/agent editing) |
+
+All other layers receive typed, shared references — they do not read files directly.
+The web UI writes **only** to `destinations.toml`; `config.toml` is never touched at runtime.
 
 Responsibilities:
-- Parse and validate TOML on startup; fail fast with a clear error
-- Provide typed access to display settings, location, and per-source intervals
-- Reload on SIGHUP or file change (mechanism TBD)
+- Parse and validate both files at startup; fail fast with a clear error on either
+- Provide typed `Config` and `DestinationsConfig` structs to the rest of the system
+- Reload `destinations.toml` on change (file watcher); `config.toml` requires restart
 
 ### `sources`
 
@@ -144,17 +151,29 @@ knowledge of panels, sources, or layout.
 
 ### `web`
 
-A lightweight HTTP server (framework TBD; minimal, no heavy frontend) running
-on the local network. Serves:
+Built on **axum** (tokio-based). Chosen for agent development friendliness:
+axum has strong compile-time typing via extractors and typed responses, explicit
+routing with no conventions magic, and wide training corpus coverage. The tokio
+runtime is isolated to a single `std::thread::spawn` call in `app`; the rest of
+the system remains on `std` threads with channels.
 
-- **Preview endpoint** — renders the current `PixelBuffer` as a PNG or SVG;
-  shows exactly what the physical display is showing
-- **Config UI** — lists available sources, allows enable/disable and parameter
-  changes; writes back to `config.toml`
-- **Source status** — last fetch time, last error, next scheduled fetch
+Endpoints:
 
-The web layer shares the `PixelBuffer` via an `Arc<RwLock<PixelBuffer>>`. It
-does **not** have its own rendering logic — it reuses the render pipeline.
+| Route | Method | Description |
+|-------|--------|-------------|
+| `GET /preview` | — | Current `PixelBuffer` as PNG — pixel-identical to the physical display |
+| `GET /sources` | — | List all sources with last fetch time, last error, next scheduled fetch |
+| `GET /destinations` | — | List configured destinations and their current `TripDecision` |
+| `POST /destinations` | JSON | Create or update a destination and its `TripCriteria` |
+| `DELETE /destinations/:name` | — | Remove a destination |
+| `POST /sources/:name/enable` | — | Enable a source |
+| `POST /sources/:name/disable` | — | Disable a source |
+
+The web layer shares state via `Arc<RwLock<T>>`:
+- `PixelBuffer` — read-only (serves preview)
+- `DestinationsConfig` — read/write (config UI writes here, reloads evaluation)
+
+It does **not** have its own rendering logic — it reuses the render pipeline.
 
 ### `app`
 
@@ -174,18 +193,22 @@ Responsibilities:
 ## Concurrency Model
 
 ```
-main thread
-  ├── spawns: source/noaa thread  ──sends DataPoint──▶ channel
-  ├── spawns: source/usgs thread  ──sends DataPoint──▶ channel
-  ├── spawns: source/wsdot thread ──sends DataPoint──▶ channel
-  ├── spawns: web server thread   ──reads Arc<RwLock<PixelBuffer>>
-  └── owns:   main loop (recv channel, render, display)
+main thread (std)
+  ├── spawns: source/noaa thread (std)   ──sends DataPoint──▶ mpsc channel
+  ├── spawns: source/usgs thread (std)   ──sends DataPoint──▶ mpsc channel
+  ├── spawns: source/wsdot thread (std)  ──sends DataPoint──▶ mpsc channel
+  ├── spawns: web server thread (std)
+  │     └── starts tokio runtime
+  │           └── axum router ──reads Arc<RwLock<PixelBuffer>>
+  │                           ──reads/writes Arc<RwLock<DestinationsConfig>>
+  └── owns: main loop (recv channel, evaluate, render, display)
 ```
 
 - Sources are isolated; one panicking source does not take down others
 - The main loop is single-threaded — no concurrent writes to the display or PixelBuffer
-- The web server reads PixelBuffer via `Arc<RwLock>` (read lock only)
-- No async runtime; threads and `std::sync::mpsc` channels throughout
+- The tokio runtime is confined to the web server thread; all other concurrency uses `std`
+- The web server holds read locks on `PixelBuffer`; write locks on `DestinationsConfig`
+  are short-lived (config update only, not on the hot path)
 
 ---
 
@@ -263,15 +286,20 @@ read from `Arc<RwLock<PixelBuffer>>` and the config.
 
 ---
 
+## Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Web framework | **axum** | Strong compile-time typing; explicit routing; wide agent training corpus coverage; tokio isolated to one thread |
+| Criteria storage | **`destinations.toml`** | Separates user data from hardware config; web UI writes only this file; schema maps directly to `Destination` + `TripCriteria` types |
+| Config reload | **file watcher for `destinations.toml`; restart for `config.toml`** | Destinations change via web UI at runtime; hardware config changes are rare and benefit from a clean restart |
+
 ## Open Questions
 
 | Question | Status |
 |----------|--------|
-| Config reload mechanism: SIGHUP vs. file watcher | Undecided |
-| Web framework selection | Undecided — leaning minimal (axum or tiny_http) |
-| Trail/campsite data source strategy | No unified API; approach TBD |
+| Trail/campsite data source strategy | No unified API; approach TBD — spike required |
 | Road closure data coverage | WSDOT covers state roads; USFS/county coverage inconsistent |
-| Go/no-go criteria storage | Per-destination thresholds in config.toml vs. separate file TBD |
 | Font: embedded bitmap vs. runtime loaded | Undecided |
 | Partial refresh region granularity: per-panel vs. full buffer | Undecided |
 
