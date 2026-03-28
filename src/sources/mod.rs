@@ -1,3 +1,4 @@
+pub mod road_closures;
 pub mod trail_conditions;
 
 use crate::domain::DataPoint;

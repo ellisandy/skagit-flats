@@ -17,6 +17,7 @@ weather_interval_secs = 300   # 5 minutes
 river_interval_secs = 300     # 5 minutes
 ferry_interval_secs = 60      # 1 minute
 trail_interval_secs = 900     # 15 minutes
+road_interval_secs = 1800     # 30 minutes
 
 [sources.trail]
 # NPS park code for trail condition alerts (default: "noca" = North Cascades)
@@ -24,3 +25,10 @@ park_code = "noca"
 # NPS API key — register free at https://www.nps.gov/subjects/developer/get-started.htm
 # Can also be set via NPS_API_KEY environment variable.
 # nps_api_key = "YOUR_KEY_HERE"
+
+[sources.road]
+# WSDOT route numbers to monitor for closures (default: ["020"] = SR-20)
+routes = ["020", "005", "530"]
+# WSDOT Traveler Information API access code — register free at wsdot.wa.gov/traffic/api/
+# Can also be set via WSDOT_ACCESS_CODE environment variable.
+# wsdot_access_code = "YOUR_KEY_HERE"

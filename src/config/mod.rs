@@ -35,12 +35,20 @@ pub struct SourceIntervals {
     pub ferry_interval_secs: u64,
     #[serde(default = "default_trail_interval")]
     pub trail_interval_secs: u64,
+    #[serde(default = "default_road_interval")]
+    pub road_interval_secs: u64,
     #[serde(default)]
     pub trail: Option<TrailSourceConfig>,
+    #[serde(default)]
+    pub road: Option<RoadSourceConfig>,
 }
 
 fn default_trail_interval() -> u64 {
     900
+}
+
+fn default_road_interval() -> u64 {
+    1800
 }
 
 /// Configuration for the trail conditions source (NPS Alerts API).
@@ -55,6 +63,20 @@ pub struct TrailSourceConfig {
 
 fn default_park_code() -> String {
     "noca".to_string()
+}
+
+/// Configuration for the road closures source (WSDOT Highway Alerts API).
+#[derive(Debug, Deserialize, Clone)]
+pub struct RoadSourceConfig {
+    /// WSDOT access code. If absent, falls back to WSDOT_ACCESS_CODE env var.
+    pub wsdot_access_code: Option<String>,
+    /// WSDOT route numbers to monitor, e.g. ["020", "005"]. Defaults to ["020"].
+    #[serde(default = "default_routes")]
+    pub routes: Vec<String>,
+}
+
+fn default_routes() -> Vec<String> {
+    vec!["020".to_string()]
 }
 
 /// Destinations configuration loaded from destinations.toml.
@@ -135,9 +157,13 @@ weather_interval_secs = 300
 river_interval_secs = 300
 ferry_interval_secs = 60
 trail_interval_secs = 900
+road_interval_secs = 1800
 
 [sources.trail]
 park_code = "noca"
+
+[sources.road]
+routes = ["020", "005"]
 "#;
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(toml.as_bytes()).unwrap();
@@ -146,6 +172,9 @@ park_code = "noca"
         assert_eq!(cfg.display.height, 480);
         assert_eq!(cfg.location.name, "Mount Vernon, WA");
         assert_eq!(cfg.sources.ferry_interval_secs, 60);
+        assert_eq!(cfg.sources.road_interval_secs, 1800);
+        let road_cfg = cfg.sources.road.unwrap();
+        assert_eq!(road_cfg.routes, vec!["020", "005"]);
     }
 
     #[test]
