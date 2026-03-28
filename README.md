@@ -26,6 +26,7 @@ render pipeline as a live preview.
 | USGS NWIS | River gauge — water level and streamflow | `waterservices.usgs.gov` |
 | WSDOT Ferries | Vessel status and departure times for a configured route | `wsdot.wa.gov/ferries/api` |
 | Trail / Campsite | Weekend suitability for configured hiking and camping destinations | WTA, Recreation.gov, USFS |
+| Road Closures | Closure and restriction status for roads leading to configured destinations | WSDOT, USFS, county APIs |
 
 All default APIs are public and require no authentication.
 
@@ -56,6 +57,24 @@ in-browser preview.
 
 See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the
 full design.
+
+---
+
+The system also evaluates configurable go/no-go criteria per destination
+(temperature range, precipitation limits, river level thresholds, road access)
+and renders a clear **GO / NO GO** decision panel alongside the raw data.
+
+---
+
+## Running locally (no hardware)
+
+```sh
+docker compose up
+```
+
+Opens the web UI at `http://localhost:8080`. The SPI display driver is disabled;
+the browser preview is the only output. Set `SKAGIT_FIXTURE_DATA=1` to use
+static fixture data instead of live API calls.
 
 ---
 

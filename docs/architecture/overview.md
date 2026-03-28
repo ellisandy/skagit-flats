@@ -64,7 +64,7 @@ retrying. The main loop is never blocked by a slow or failing source.
 
 **Adding a source**: implement `Source`, register in `app`. No other changes.
 
-**Initial sources**: NOAA/NWS, USGS NWIS, WSDOT Ferries, Trail/Campsite (TBD).
+**Initial sources**: NOAA/NWS, USGS NWIS, WSDOT Ferries, Trail/Campsite (TBD), Road Closures (TBD).
 
 ### `domain`
 
@@ -75,15 +75,31 @@ WeatherObservation  — temperature, wind, sky condition, observation time
 RiverGauge          — water level (ft), streamflow (cfs), site ID, timestamp
 FerryStatus         — route, vessel name, estimated departures
 TrailCondition      — destination name, suitability summary, last updated
-DataPoint           — enum wrapping all of the above
+RoadStatus          — road name, closure/restriction status, affected segment
+TripCriteria        — per-destination thresholds (min/max temp, max precip,
+                       max river level, road open required, etc.)
+TripDecision        — Go | NoGo { reasons: Vec<String> }
+DataPoint           — enum wrapping all source outputs
 ```
 
 Domain types are `Clone + Send`. Sources produce them; presentation consumes them.
 
+### `evaluation`
+
+Applies `TripCriteria` to current domain values and produces a `TripDecision`
+(Go or NoGo with reasons). This is pure logic — no I/O, no rendering.
+
+```rust
+pub fn evaluate(destination: &Destination, state: &DomainState) -> TripDecision
+```
+
+Criteria are loaded from config and editable via the web interface. The
+evaluation result is passed to `presentation` like any other domain value.
+
 ### `presentation`
 
-Transforms domain values into `Panel` structs — a title and a list of text rows.
-No knowledge of pixels, fonts, or layout geometry.
+Transforms domain values and evaluation results into `Panel` structs — a title
+and a list of text rows. No knowledge of pixels, fonts, or layout geometry.
 
 ```rust
 pub struct Panel {
@@ -92,8 +108,10 @@ pub struct Panel {
 }
 ```
 
-Each source type has a corresponding formatter function. The web interface can
-also use presentation to render text previews independently of the pixel pipeline.
+Each source type has a corresponding formatter function. Trip decisions render
+as a prominent GO / NO GO panel with the blocking reasons listed. The web
+interface can also use presentation to render text previews independently of
+the pixel pipeline.
 
 ### `render`
 
@@ -171,6 +189,34 @@ main thread
 
 ---
 
+## Local Development (Docker, No Hardware)
+
+The daemon supports a `--no-hardware` mode (or `SKAGIT_NO_HARDWARE=1` env var)
+that disables the SPI display driver entirely. In this mode:
+
+- The `display` layer is replaced by a no-op stub
+- The web interface is the only output — the preview endpoint serves the current
+  `PixelBuffer` as a PNG
+- Sources still run on their normal schedules (or can be pointed at fixture data)
+
+A `Dockerfile` and `docker-compose.yml` at the repo root provide a ready-to-run
+local environment:
+
+```sh
+docker compose up
+# Web UI available at http://localhost:8080
+```
+
+This allows full end-to-end testing of the config UI, source pipeline, and
+render output without a Pi or e-ink panel. The preview in the browser is
+pixel-identical to what the physical display would show.
+
+**Fixture mode**: set `SKAGIT_FIXTURE_DATA=1` to have sources return static
+fixture responses instead of making live API calls. Useful for UI development
+and CI.
+
+---
+
 ## Extension Points
 
 ### Adding a new data source
@@ -224,6 +270,8 @@ read from `Arc<RwLock<PixelBuffer>>` and the config.
 | Config reload mechanism: SIGHUP vs. file watcher | Undecided |
 | Web framework selection | Undecided — leaning minimal (axum or tiny_http) |
 | Trail/campsite data source strategy | No unified API; approach TBD |
+| Road closure data coverage | WSDOT covers state roads; USFS/county coverage inconsistent |
+| Go/no-go criteria storage | Per-destination thresholds in config.toml vs. separate file TBD |
 | Font: embedded bitmap vs. runtime loaded | Undecided |
 | Partial refresh region granularity: per-panel vs. full buffer | Undecided |
 

@@ -26,8 +26,11 @@ consumes near-zero power when static.
 - Show current weather conditions from a nearby NOAA observation station
 - Show vessel status and departure times for a configured WSDOT ferry route
 - Allow users to input specific local campsites or hiking destinations and answer
-  "Is this a good weekend to go?" based on weather, river levels, and trail
-  conditions
+  "Is this a good weekend to go?" based on weather, river levels, trail
+  conditions, and road access
+- Allow users to configure per-destination go/no-go criteria (minimum/maximum
+  temperature, precipitation thresholds, river level limits, road closure rules)
+  so the system can render a clear go or no-go decision rather than raw data
 - Serve a web interface from the Pi for configuring which sources are displayed,
   how they are formatted, and showing a live mock preview of the e-ink layout
 - Update each panel on its own schedule, appropriate to how fast that data
@@ -37,6 +40,8 @@ consumes near-zero power when static.
   crashes are not
 - Be self-describing: a new user should be able to understand what is displayed
   and why without prior explanation
+- Run without hardware in a Docker container (web UI and preview only) for local
+  development and testing
 
 ## Non-Goals
 
@@ -115,6 +120,7 @@ Initial sources (examples, not the fixed set):
 | USGS NWIS | `waterservices.usgs.gov` | Water level (ft) and streamflow (cfs) at a configured gauge site |
 | WSDOT Ferries | `wsdot.wa.gov/ferries/api` | Vessel location, estimated departure times for a configured route |
 | Trail/Campsite Conditions | Recreation.gov / USFS / Wta.org | Trail and campsite status, recent trip reports, weekend suitability summary |
+| Road Closures | WSDOT, USFS, county road APIs | Closure and restriction status for roads leading to configured destinations |
 
 All initial APIs are public and require no authentication.
 
@@ -124,6 +130,8 @@ All initial APIs are public and require no authentication.
 |------|----------|-------|
 | WSDOT ferry API instability | Medium | The WSDOT API has changed endpoints before; may need a thin adapter layer |
 | Trail/campsite data source quality | Medium | No single authoritative API; may need to aggregate WTA, Recreation.gov, and USFS |
+| Road closure data coverage | Medium | WSDOT covers state roads; USFS and county roads have inconsistent API coverage |
+| Go/no-go criteria UX | Low | Per-destination threshold configuration needs a clear UI; risk of over-complexity |
 | Web UI complexity on Pi Zero 2 W | Medium | Serving HTTP + rendering + SPI driver on one process; may need to profile memory |
 | SPI driver compatibility across Pi models | Low | `rppal` supports Pi Zero 2 W; untested on other models |
 | E-ink partial update artifacts | Low | Partial refresh accumulates ghosting; mitigated by hourly full refresh |
@@ -135,7 +143,7 @@ All initial APIs are public and require no authentication.
 
 - Tides (NOAA CO-OPS API) — obvious addition but deferred until core sources work
 - Air quality (AirNow API) — relevant in wildfire season; deferred
-- Road/bridge closure alerts — no suitable public API identified
+- Road/bridge closure alerts — moved to in-scope (see Data Sources)
 - NWS alerts/warnings overlay — would require layout changes; deferred
 
 ## Success Criteria
@@ -146,9 +154,11 @@ The project is done when:
 2. It runs on a Pi Zero 2 W with a real Waveshare 7.5 inch panel attached
 3. All initial source panels show live data
 4. The web interface allows a user to add/remove sources and see a mock preview
-5. A new user can understand the display and reconfigure it without help
-6. The display updates without intervention for 30 days
-7. A power cycle recovers automatically via systemd
+5. A user can configure go/no-go criteria for a destination and see a clear decision on the display
+6. The full stack runs in Docker without hardware for local development
+7. A new user can understand the display and reconfigure it without help
+8. The display updates without intervention for 30 days
+9. A power cycle recovers automatically via systemd
 
 ## Current Status
 
