@@ -2,7 +2,7 @@ use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::evaluate;
-use crate::presentation::{build_panels, build_panels_with_destinations};
+use crate::presentation::build_panels_with_destinations;
 use crate::render::render_panels;
 use crate::sources::noaa::NoaaSource;
 use crate::sources::usgs::UsgsSource;

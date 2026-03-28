@@ -34,7 +34,7 @@ fn compute_grid(n: usize, total_w: u32, total_h: u32) -> Vec<Rect> {
         5 | 6 => 3,
         _ => ((n as f32).sqrt().ceil() as usize).max(1),
     };
-    let rows = (n + cols - 1) / cols;
+    let rows = n.div_ceil(cols);
 
     let cell_w = (total_w - PANEL_GAP * (cols as u32).saturating_sub(1)) / cols as u32;
     let cell_h = (total_h - PANEL_GAP * (rows as u32).saturating_sub(1)) / rows as u32;

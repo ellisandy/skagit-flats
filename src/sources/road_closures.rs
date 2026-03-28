@@ -69,6 +69,7 @@ impl RoadClosuresSource {
 struct WsdotAlert {
     event_category: String,
     headline_description: String,
+    #[allow(dead_code)]
     extended_description: String,
     start_roadway_location: RoadwayLocation,
     end_roadway_location: RoadwayLocation,

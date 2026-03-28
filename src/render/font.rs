@@ -4,7 +4,6 @@
 /// 7 bytes per glyph, with bits 4–0 representing the five columns (bit 4 =
 /// leftmost). Characters are rendered with 1-pixel spacing on each side,
 /// giving a 6x8 cell.
-
 pub const GLYPH_WIDTH: u32 = 5;
 pub const GLYPH_HEIGHT: u32 = 7;
 /// Cell dimensions include 1px right/bottom spacing.
@@ -18,7 +17,7 @@ const GLYPH_COUNT: usize = 95;
 /// for characters outside the printable ASCII range.
 pub fn glyph(ch: char) -> &'static [u8; 7] {
     let idx = ch as usize;
-    if idx >= 32 && idx <= 126 {
+    if (32..=126).contains(&idx) {
         let offset = idx - 32;
         // Safety: FONT_DATA has exactly GLYPH_COUNT * 7 bytes.
         let start = offset * 7;

@@ -18,7 +18,7 @@ pub struct PixelBuffer {
 impl PixelBuffer {
     /// Create a new all-white (zero) pixel buffer.
     pub fn new(width: u32, height: u32) -> Self {
-        let byte_count = ((width * height + 7) / 8) as usize;
+        let byte_count = (width * height).div_ceil(8) as usize;
         PixelBuffer {
             width,
             height,
