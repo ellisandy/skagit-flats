@@ -1,6 +1,7 @@
 pub mod noaa;
 pub mod road_closures;
 pub mod trail_conditions;
+pub mod usgs;
 pub mod wsdot;
 
 use crate::domain::DataPoint;

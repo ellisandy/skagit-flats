@@ -38,9 +38,15 @@ pub fn format_weather(obs: &WeatherObservation) -> Panel {
 
 /// Format a RiverGauge reading into a Panel.
 pub fn format_river(gauge: &RiverGauge) -> Panel {
-    Panel::new("Skagit River")
+    let title = if gauge.site_name.is_empty() {
+        "River Gauge".to_string()
+    } else {
+        gauge.site_name.clone()
+    };
+    Panel::new(title)
         .with_row(format!("{:.1} ft", gauge.water_level_ft))
         .with_row(format!("{:.0} cfs", gauge.streamflow_cfs))
+        .with_row(fmt_time(gauge.timestamp))
 }
 
 /// Format FerryStatus into a Panel.

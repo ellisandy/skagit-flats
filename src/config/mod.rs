@@ -38,6 +38,8 @@ pub struct SourceIntervals {
     #[serde(default = "default_road_interval")]
     pub road_interval_secs: u64,
     #[serde(default)]
+    pub river: Option<RiverSourceConfig>,
+    #[serde(default)]
     pub trail: Option<TrailSourceConfig>,
     #[serde(default)]
     pub road: Option<RoadSourceConfig>,
@@ -51,6 +53,19 @@ fn default_trail_interval() -> u64 {
 
 fn default_road_interval() -> u64 {
     1800
+}
+
+/// Configuration for the USGS river gauge source.
+#[derive(Debug, Deserialize, Clone)]
+pub struct RiverSourceConfig {
+    /// USGS site ID, e.g. "12200500" for Skagit River near Mount Vernon.
+    /// Defaults to the Skagit River at Mount Vernon.
+    #[serde(default = "default_usgs_site_id")]
+    pub usgs_site_id: String,
+}
+
+fn default_usgs_site_id() -> String {
+    "12200500".to_string()
 }
 
 /// Configuration for the trail conditions source (NPS Alerts API).

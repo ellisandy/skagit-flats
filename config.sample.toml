@@ -19,6 +19,11 @@ ferry_interval_secs = 60      # 1 minute
 trail_interval_secs = 900     # 15 minutes
 road_interval_secs = 1800     # 30 minutes
 
+[sources.river]
+# USGS site ID for river gauge data (default: "12200500" = Skagit River near Mount Vernon)
+# Find site IDs at https://waterdata.usgs.gov/nwis
+usgs_site_id = "12200500"
+
 [sources.trail]
 # NPS park code for trail condition alerts (default: "noca" = North Cascades)
 park_code = "noca"

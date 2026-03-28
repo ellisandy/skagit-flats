@@ -126,6 +126,7 @@ mod tests {
     fn river_gauge(level: f32, flow: f32) -> RiverGauge {
         RiverGauge {
             site_id: "12200500".to_string(),
+            site_name: "Skagit River Near Mount Vernon, WA".to_string(),
             water_level_ft: level,
             streamflow_cfs: flow,
             timestamp: 0,

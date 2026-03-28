@@ -18,6 +18,7 @@ pub struct WeatherObservation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiverGauge {
     pub site_id: String,
+    pub site_name: String,
     pub water_level_ft: f32,
     pub streamflow_cfs: f32,
     /// Unix timestamp of the reading.

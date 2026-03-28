@@ -5,6 +5,7 @@ use crate::evaluation::evaluate;
 use crate::presentation::{build_panels, build_panels_with_destinations};
 use crate::render::render_panels;
 use crate::sources::noaa::NoaaSource;
+use crate::sources::usgs::UsgsSource;
 use crate::sources::wsdot::WsdotFerrySource;
 use crate::sources::Source;
 use crate::web;
@@ -139,6 +140,16 @@ pub fn run(opts: AppOptions, config: Config, destinations: DestinationsConfig) {
     // Spawn NOAA weather source thread.
     let noaa = NoaaSource::new(&config.location, config.sources.weather_interval_secs);
     spawn_source(noaa, tx.clone());
+
+    // Spawn USGS river gauge source thread.
+    let usgs_site_id = config
+        .sources
+        .river
+        .as_ref()
+        .map(|r| r.usgs_site_id.as_str())
+        .unwrap_or("12200500");
+    let usgs = UsgsSource::new(usgs_site_id, config.sources.river_interval_secs);
+    spawn_source(usgs, tx.clone());
 
     // Spawn WSDOT ferries source thread.
     match WsdotFerrySource::new(config.sources.ferry.as_ref(), config.sources.ferry_interval_secs) {
