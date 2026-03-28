@@ -30,10 +30,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --locked
+        run: cargo build
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test
 
   cross-compile-check:
     name: Cross-compile check (aarch64)
@@ -58,4 +58,4 @@ jobs:
             ${{ runner.os }}-cargo-aarch64-
 
       - name: Check for aarch64-unknown-linux-gnu
-        run: cargo check --locked --target aarch64-unknown-linux-gnu
+        run: cargo check --target aarch64-unknown-linux-gnu
