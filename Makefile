@@ -7,7 +7,11 @@ PI_HOST  ?= pi@skagit-flats.local
 PI_BIN   ?= /usr/local/bin/skagit-flats
 TARGET   ?= aarch64-unknown-linux-gnu
 
-.PHONY: build build-pi deploy install-service clean
+.PHONY: build build-pi check-deps deploy install-service clean
+
+# Verify cross-compilation prerequisites (rustup target, cross-compiler, rsync, ssh).
+check-deps:
+	@bash scripts/setup.sh
 
 # Build for the host (no hardware feature).
 build:
