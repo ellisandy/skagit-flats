@@ -21,11 +21,23 @@ road_interval_secs = 1800     # 30 minutes
 
 [sources.river]
 # USGS site ID for river gauge data (default: "12200500" = Skagit River near Mount Vernon)
-# Find site IDs at https://waterdata.usgs.gov/nwis
+#
+# To find your site ID:
+#   1. Go to https://waterdata.usgs.gov/nwis/rt and search for a river near you.
+#   2. Click a monitoring station in the results.
+#   3. The site ID is the number in the URL:
+#      https://waterdata.usgs.gov/monitoring-location/12200500/
+#                                                       ^^^^^^^^ this is the site ID
 usgs_site_id = "12200500"
 
 [sources.trail]
 # NPS park code for trail condition alerts (default: "noca" = North Cascades)
+#
+# To find your park code:
+#   1. Go to https://www.nps.gov/findapark/ and search for your park.
+#   2. Click the park. The park code is the short slug in the URL:
+#      https://www.nps.gov/noca/index.htm
+#                           ^^^^ this is the park code
 park_code = "noca"
 # NPS API key — register free at https://www.nps.gov/subjects/developer/get-started.htm
 # Can also be set via NPS_API_KEY environment variable.
