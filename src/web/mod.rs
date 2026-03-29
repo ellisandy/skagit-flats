@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use crate::app::SharedState;
 use crate::config::{Destination, DestinationsConfig};
 use crate::domain::TripCriteria;
-use crate::evaluation::evaluate;
+use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
 use crate::render::render_display;
 
@@ -71,11 +71,12 @@ async fn handler_list_destinations(
         .read()
         .expect("domain_state lock poisoned");
 
+    let now = current_unix_secs();
     let result: Vec<serde_json::Value> = dests
         .destinations
         .iter()
         .map(|d| {
-            let decision = evaluate(d, &domain);
+            let decision = evaluate(d, &domain, now);
             serde_json::json!({
                 "name": d.name,
                 "criteria": d.criteria,
@@ -201,7 +202,7 @@ fn re_render(state: &SharedState) {
             .domain_state
             .read()
             .expect("domain_state lock poisoned");
-        let layout = build_display_layout(&domain, &dests.destinations);
+        let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
         render_display(&layout)
     };
 
@@ -236,16 +237,21 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
         .read()
         .expect("source_statuses lock poisoned");
 
+    let now = current_unix_secs();
     let mut dest_rows = String::new();
     for d in &dests.destinations {
-        let decision = evaluate(d, &domain);
+        let decision = evaluate(d, &domain, now);
         let (badge, badge_class) = match &decision {
             crate::domain::TripDecision::Go => ("GO", "go"),
+            crate::domain::TripDecision::Caution { .. } => ("CAUTION", "caution"),
             crate::domain::TripDecision::NoGo { .. } => ("NO GO", "nogo"),
+            crate::domain::TripDecision::Unknown { .. } => ("UNKNOWN", "unknown"),
         };
         let reasons = match &decision {
             crate::domain::TripDecision::Go => String::new(),
+            crate::domain::TripDecision::Caution { warnings } => warnings.join("; "),
             crate::domain::TripDecision::NoGo { reasons } => reasons.join("; "),
+            crate::domain::TripDecision::Unknown { missing } => missing.join("; "),
         };
         let c = &d.criteria;
         dest_rows.push_str(&format!(

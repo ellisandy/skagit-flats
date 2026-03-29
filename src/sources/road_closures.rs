@@ -1,5 +1,6 @@
 use crate::config::RoadSourceConfig;
 use crate::domain::{DataPoint, RoadStatus};
+use crate::evaluation::current_unix_secs;
 use crate::sources::{Source, SourceError};
 use serde::Deserialize;
 use std::time::Duration;
@@ -130,6 +131,7 @@ impl Source for RoadClosuresSource {
                 road_name,
                 status: status_desc,
                 affected_segment: segment,
+                timestamp: current_unix_secs(),
             }))
         } else {
             // No closures found for monitored routes — report open.
@@ -143,6 +145,7 @@ impl Source for RoadClosuresSource {
                 road_name,
                 status: "No active closures".to_string(),
                 affected_segment: String::new(),
+                timestamp: current_unix_secs(),
             }))
         }
     }

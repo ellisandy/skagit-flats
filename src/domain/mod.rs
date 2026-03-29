@@ -50,6 +50,9 @@ pub struct RoadStatus {
     /// Human-readable status: "open", "closed", "restricted", etc.
     pub status: String,
     pub affected_segment: String,
+    /// Unix timestamp of the last status update.
+    #[serde(default)]
+    pub timestamp: u64,
 }
 
 /// Per-destination go/no-go thresholds, loaded from destinations.toml.
@@ -65,11 +68,19 @@ pub struct TripCriteria {
 }
 
 /// Result of evaluating a destination against current conditions.
+///
+/// States in priority order (see `docs/product/trip-recommendation-model.md`):
+/// - `NoGo`: a hard criterion is exceeded — don't go.
+/// - `Unknown`: no blocker confirmed but required data is absent or stale.
+/// - `Caution`: all criteria met but one or more are near-miss or data aging.
+/// - `Go`: all criteria met, all required data present and fresh.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "decision")]
 pub enum TripDecision {
     Go,
+    Caution { warnings: Vec<String> },
     NoGo { reasons: Vec<String> },
+    Unknown { missing: Vec<String> },
 }
 
 /// All possible outputs from a data source.
@@ -151,6 +162,7 @@ mod tests {
             road_name: "SR-20".to_string(),
             status: "closed".to_string(),
             affected_segment: "Newhalem to Rainy Pass".to_string(),
+            timestamp: 5000,
         }
     }
 
@@ -269,6 +281,16 @@ mod tests {
     }
 
     #[test]
+    fn trip_decision_caution_serialization() {
+        let decision = TripDecision::Caution {
+            warnings: vec!["Temp near minimum".to_string()],
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"decision\":\"Caution\""));
+        assert!(json.contains("Temp near minimum"));
+    }
+
+    #[test]
     fn trip_decision_nogo_serialization() {
         let decision = TripDecision::NoGo {
             reasons: vec!["Too cold".to_string()],
@@ -276,6 +298,16 @@ mod tests {
         let json = serde_json::to_string(&decision).unwrap();
         assert!(json.contains("\"decision\":\"NoGo\""));
         assert!(json.contains("Too cold"));
+    }
+
+    #[test]
+    fn trip_decision_unknown_serialization() {
+        let decision = TripDecision::Unknown {
+            missing: vec!["No weather data".to_string()],
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"decision\":\"Unknown\""));
+        assert!(json.contains("No weather data"));
     }
 
     #[test]

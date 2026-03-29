@@ -1,74 +1,186 @@
 use crate::config::Destination;
 use crate::domain::{DomainState, TripDecision};
 
+// ─── Staleness thresholds ────────────────────────────────────────────────────
+// Data older than these limits (in seconds) causes an UNKNOWN result for any
+// criterion that depends on that source. See trip-recommendation-model.md.
+
+const WEATHER_STALE_SECS: u64 = 10_800; // 3 hours
+const RIVER_STALE_SECS: u64 = 21_600; // 6 hours
+const ROAD_STALE_SECS: u64 = 86_400; // 24 hours
+// Reserved for when trail criteria are added to TripCriteria.
+#[allow(dead_code)]
+const TRAIL_STALE_SECS: u64 = 172_800; // 48 hours
+
+// ─── Near-miss margins ───────────────────────────────────────────────────────
+// A criterion within this margin of its threshold triggers CAUTION rather
+// than GO, even though it technically passes. See trip-recommendation-model.md.
+
+const TEMP_CAUTION_MARGIN_F: f32 = 5.0; // °F
+const PRECIP_CAUTION_MARGIN_PCT: f32 = 10.0; // percentage points
+const RIVER_LEVEL_CAUTION_RATIO: f32 = 0.10; // 10% of threshold
+const RIVER_FLOW_CAUTION_RATIO: f32 = 0.10; // 10% of threshold
+
+fn is_stale(data_ts: u64, now_secs: u64, threshold: u64) -> bool {
+    now_secs.saturating_sub(data_ts) > threshold
+}
+
 /// Evaluate a destination's go/no-go criteria against the current domain state.
 ///
-/// This is pure logic — no I/O, no rendering. A `Go` result means all
-/// configured criteria are satisfied. A `NoGo` result includes the list of
-/// blocking reasons for display.
-pub fn evaluate(destination: &Destination, state: &DomainState) -> TripDecision {
+/// Returns one of four states (priority order):
+/// 1. `NoGo`    — a hard criterion is exceeded.
+/// 2. `Unknown` — no blocker but required data is absent or stale.
+/// 3. `Caution` — all criteria pass but a near-miss or aging data was found.
+/// 4. `Go`      — all criteria met, all required data fresh.
+///
+/// `now_secs` is a Unix timestamp (seconds) used to measure data staleness.
+/// Pass `current_unix_secs()` in production; pass a fixed value in tests.
+pub fn evaluate(destination: &Destination, state: &DomainState, now_secs: u64) -> TripDecision {
     let criteria = &destination.criteria;
     let mut reasons: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
-    if let Some(weather) = &state.weather {
-        if let Some(min) = criteria.min_temp_f {
-            if weather.temperature_f < min {
-                reasons.push(format!(
-                    "Temperature {:.0}°F below minimum {:.0}°F",
-                    weather.temperature_f, min
-                ));
+    // ── Weather ──────────────────────────────────────────────────────────────
+    let needs_weather = criteria.min_temp_f.is_some()
+        || criteria.max_temp_f.is_some()
+        || criteria.max_precip_chance_pct.is_some();
+
+    if needs_weather {
+        match &state.weather {
+            None => missing.push("No weather data".to_string()),
+            Some(w) if is_stale(w.observation_time, now_secs, WEATHER_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(w.observation_time) / 3600;
+                missing.push(format!("Weather data stale (>{}h)", age_h));
             }
-        }
-        if let Some(max) = criteria.max_temp_f {
-            if weather.temperature_f > max {
-                reasons.push(format!(
-                    "Temperature {:.0}°F above maximum {:.0}°F",
-                    weather.temperature_f, max
-                ));
-            }
-        }
-        if let Some(max_precip) = criteria.max_precip_chance_pct {
-            if weather.precip_chance_pct > max_precip {
-                reasons.push(format!(
-                    "Precip chance {:.0}% exceeds limit {:.0}%",
-                    weather.precip_chance_pct, max_precip
-                ));
+            Some(w) => {
+                if let Some(min) = criteria.min_temp_f {
+                    if w.temperature_f < min {
+                        reasons.push(format!(
+                            "Temperature {:.0}°F below minimum {:.0}°F",
+                            w.temperature_f, min
+                        ));
+                    } else if w.temperature_f < min + TEMP_CAUTION_MARGIN_F {
+                        warnings.push(format!(
+                            "Temp {:.0}°F — {:.0}° above minimum",
+                            w.temperature_f,
+                            w.temperature_f - min
+                        ));
+                    }
+                }
+                if let Some(max) = criteria.max_temp_f {
+                    if w.temperature_f > max {
+                        reasons.push(format!(
+                            "Temperature {:.0}°F above maximum {:.0}°F",
+                            w.temperature_f, max
+                        ));
+                    } else if w.temperature_f > max - TEMP_CAUTION_MARGIN_F {
+                        warnings.push(format!(
+                            "Temp {:.0}°F — {:.0}° below maximum",
+                            w.temperature_f,
+                            max - w.temperature_f
+                        ));
+                    }
+                }
+                if let Some(max_precip) = criteria.max_precip_chance_pct {
+                    if w.precip_chance_pct > max_precip {
+                        reasons.push(format!(
+                            "Precip chance {:.0}% exceeds limit {:.0}%",
+                            w.precip_chance_pct, max_precip
+                        ));
+                    } else if w.precip_chance_pct > max_precip - PRECIP_CAUTION_MARGIN_PCT {
+                        warnings.push(format!(
+                            "Precip chance {:.0}% — {:.0}pp below limit",
+                            w.precip_chance_pct,
+                            max_precip - w.precip_chance_pct
+                        ));
+                    }
+                }
             }
         }
     }
 
-    if let Some(river) = &state.river {
-        if let Some(max_level) = criteria.max_river_level_ft {
-            if river.water_level_ft > max_level {
-                reasons.push(format!(
-                    "River level {:.1}ft above limit {:.1}ft",
-                    river.water_level_ft, max_level
-                ));
+    // ── River ────────────────────────────────────────────────────────────────
+    let needs_river =
+        criteria.max_river_level_ft.is_some() || criteria.max_river_flow_cfs.is_some();
+
+    if needs_river {
+        match &state.river {
+            None => missing.push("No river data".to_string()),
+            Some(r) if is_stale(r.timestamp, now_secs, RIVER_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(r.timestamp) / 3600;
+                missing.push(format!("River data stale (>{}h)", age_h));
             }
-        }
-        if let Some(max_flow) = criteria.max_river_flow_cfs {
-            if river.streamflow_cfs > max_flow {
-                reasons.push(format!(
-                    "River flow {:.0}cfs exceeds limit {:.0}cfs",
-                    river.streamflow_cfs, max_flow
-                ));
+            Some(r) => {
+                if let Some(max_level) = criteria.max_river_level_ft {
+                    if r.water_level_ft > max_level {
+                        reasons.push(format!(
+                            "River level {:.1}ft above limit {:.1}ft",
+                            r.water_level_ft, max_level
+                        ));
+                    } else if r.water_level_ft > max_level * (1.0 - RIVER_LEVEL_CAUTION_RATIO) {
+                        warnings.push(format!(
+                            "River level {:.1}ft — near limit {:.1}ft",
+                            r.water_level_ft, max_level
+                        ));
+                    }
+                }
+                if let Some(max_flow) = criteria.max_river_flow_cfs {
+                    if r.streamflow_cfs > max_flow {
+                        reasons.push(format!(
+                            "River flow {:.0}cfs exceeds limit {:.0}cfs",
+                            r.streamflow_cfs, max_flow
+                        ));
+                    } else if r.streamflow_cfs > max_flow * (1.0 - RIVER_FLOW_CAUTION_RATIO) {
+                        warnings.push(format!(
+                            "River flow {:.0}cfs — near limit {:.0}cfs",
+                            r.streamflow_cfs, max_flow
+                        ));
+                    }
+                }
             }
         }
     }
 
+    // ── Road ─────────────────────────────────────────────────────────────────
     if criteria.road_open_required {
-        if let Some(road) = &state.road {
-            if road.status != "open" {
-                reasons.push(format!("{} is {}", road.road_name, road.status));
+        match &state.road {
+            None => missing.push("No road data".to_string()),
+            Some(rd) if is_stale(rd.timestamp, now_secs, ROAD_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(rd.timestamp) / 3600;
+                missing.push(format!("Road data stale (>{}h)", age_h));
+            }
+            Some(rd) => {
+                if rd.status != "open" && rd.status != "No active closures" {
+                    reasons.push(format!("{} is {}", rd.road_name, rd.status));
+                }
             }
         }
     }
 
-    if reasons.is_empty() {
-        TripDecision::Go
-    } else {
-        TripDecision::NoGo { reasons }
+    // ── Apply priority rules ─────────────────────────────────────────────────
+    // 1. NO GO beats everything.
+    if !reasons.is_empty() {
+        return TripDecision::NoGo { reasons };
     }
+    // 2. UNKNOWN when required data is absent or stale (and no confirmed blocker).
+    if !missing.is_empty() {
+        return TripDecision::Unknown { missing };
+    }
+    // 3. CAUTION for near-miss conditions.
+    if !warnings.is_empty() {
+        return TripDecision::Caution { warnings };
+    }
+    // 4. GO.
+    TripDecision::Go
+}
+
+/// Return the current time as Unix seconds. Use in production call sites.
+pub fn current_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -78,6 +190,11 @@ mod tests {
     use crate::domain::{
         DomainState, RiverGauge, RoadStatus, TripCriteria, WeatherObservation,
     };
+
+    // All test data uses timestamp = 0. We pass now_secs = 0 to evaluate
+    // so data appears perfectly fresh. Tests that exercise staleness pass
+    // a different now_secs explicitly.
+    const NOW: u64 = 0;
 
     fn default_criteria() -> TripCriteria {
         TripCriteria {
@@ -138,23 +255,24 @@ mod tests {
             road_name: "SR-20".to_string(),
             status: status.to_string(),
             affected_segment: "Newhalem to Rainy Pass".to_string(),
+            timestamp: 0,
         }
     }
 
-    // --- Temperature criteria ---
+    // ── Temperature criteria ──────────────────────────────────────────────────
 
     #[test]
     fn go_when_all_criteria_met() {
         let dest = make_dest(Some(40.0), Some(90.0));
         let state = weather_state(65.0);
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
     }
 
     #[test]
     fn no_go_when_too_cold() {
         let dest = make_dest(Some(50.0), None);
         let state = weather_state(40.0);
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("below minimum"));
@@ -167,7 +285,7 @@ mod tests {
     fn no_go_when_too_hot() {
         let dest = make_dest(None, Some(80.0));
         let state = weather_state(85.0);
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("above maximum"));
@@ -177,20 +295,52 @@ mod tests {
     }
 
     #[test]
-    fn go_at_exact_min_temp_boundary() {
+    fn caution_at_exact_min_temp_boundary() {
+        // Exactly at threshold → within near-miss margin → CAUTION.
         let dest = make_dest(Some(50.0), None);
         let state = weather_state(50.0);
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Caution { .. }));
     }
 
     #[test]
-    fn go_at_exact_max_temp_boundary() {
+    fn caution_at_exact_max_temp_boundary() {
+        // Exactly at threshold → within near-miss margin → CAUTION.
         let dest = make_dest(None, Some(80.0));
         let state = weather_state(80.0);
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Caution { .. }));
     }
 
-    // --- Precipitation criteria ---
+    #[test]
+    fn caution_when_temp_near_min() {
+        // 52°F with min=50°F → within 5°F margin → CAUTION
+        let dest = make_dest(Some(50.0), None);
+        let state = weather_state(52.0);
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Caution { warnings } => {
+                assert_eq!(warnings.len(), 1);
+                assert!(warnings[0].contains("Temp"));
+                assert!(warnings[0].contains("minimum"));
+            }
+            _ => panic!("expected Caution"),
+        }
+    }
+
+    #[test]
+    fn caution_when_temp_near_max() {
+        // 78°F with max=80°F → within 5°F margin → CAUTION
+        let dest = make_dest(None, Some(80.0));
+        let state = weather_state(78.0);
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Caution { warnings } => {
+                assert_eq!(warnings.len(), 1);
+                assert!(warnings[0].contains("Temp"));
+                assert!(warnings[0].contains("maximum"));
+            }
+            _ => panic!("expected Caution"),
+        }
+    }
+
+    // ── Precipitation criteria ────────────────────────────────────────────────
 
     #[test]
     fn no_go_when_precip_too_high() {
@@ -202,7 +352,7 @@ mod tests {
         let mut obs = weather_obs(65.0);
         obs.precip_chance_pct = 80.0;
         state.weather = Some(obs);
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("Precip chance"));
@@ -212,7 +362,8 @@ mod tests {
     }
 
     #[test]
-    fn go_at_exact_precip_boundary() {
+    fn caution_at_exact_precip_boundary() {
+        // Exactly at threshold → within near-miss margin → CAUTION.
         let dest = make_dest_with(TripCriteria {
             max_precip_chance_pct: Some(50.0),
             ..default_criteria()
@@ -221,10 +372,30 @@ mod tests {
         let mut obs = weather_obs(65.0);
         obs.precip_chance_pct = 50.0;
         state.weather = Some(obs);
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Caution { .. }));
     }
 
-    // --- River level criteria ---
+    #[test]
+    fn caution_when_precip_near_limit() {
+        // 45% with max=50% → within 10pp margin → CAUTION
+        let dest = make_dest_with(TripCriteria {
+            max_precip_chance_pct: Some(50.0),
+            ..default_criteria()
+        });
+        let mut state = DomainState::default();
+        let mut obs = weather_obs(65.0);
+        obs.precip_chance_pct = 45.0;
+        state.weather = Some(obs);
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Caution { warnings } => {
+                assert_eq!(warnings.len(), 1);
+                assert!(warnings[0].contains("Precip"));
+            }
+            _ => panic!("expected Caution"),
+        }
+    }
+
+    // ── River level criteria ──────────────────────────────────────────────────
 
     #[test]
     fn no_go_when_river_too_high() {
@@ -236,7 +407,7 @@ mod tests {
             river: Some(river_gauge(14.5, 5000.0)),
             ..Default::default()
         };
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("River level"));
@@ -246,7 +417,8 @@ mod tests {
     }
 
     #[test]
-    fn go_at_exact_river_level_boundary() {
+    fn caution_at_exact_river_level_boundary() {
+        // Exactly at threshold → within 10% near-miss margin → CAUTION.
         let dest = make_dest_with(TripCriteria {
             max_river_level_ft: Some(12.0),
             ..default_criteria()
@@ -255,10 +427,29 @@ mod tests {
             river: Some(river_gauge(12.0, 5000.0)),
             ..Default::default()
         };
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Caution { .. }));
     }
 
-    // --- River flow criteria ---
+    #[test]
+    fn caution_when_river_near_level_limit() {
+        // 11.0ft with max=12.0ft → within 10% (1.2ft margin) → CAUTION
+        let dest = make_dest_with(TripCriteria {
+            max_river_level_ft: Some(12.0),
+            ..default_criteria()
+        });
+        let state = DomainState {
+            river: Some(river_gauge(11.0, 1000.0)),
+            ..Default::default()
+        };
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Caution { warnings } => {
+                assert!(warnings[0].contains("River level"));
+            }
+            _ => panic!("expected Caution"),
+        }
+    }
+
+    // ── River flow criteria ───────────────────────────────────────────────────
 
     #[test]
     fn no_go_when_river_flow_too_high() {
@@ -270,7 +461,7 @@ mod tests {
             river: Some(river_gauge(8.0, 15000.0)),
             ..Default::default()
         };
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("River flow"));
@@ -280,7 +471,8 @@ mod tests {
     }
 
     #[test]
-    fn go_at_exact_river_flow_boundary() {
+    fn caution_at_exact_river_flow_boundary() {
+        // Exactly at threshold → within 10% near-miss margin → CAUTION.
         let dest = make_dest_with(TripCriteria {
             max_river_flow_cfs: Some(10000.0),
             ..default_criteria()
@@ -289,10 +481,29 @@ mod tests {
             river: Some(river_gauge(8.0, 10000.0)),
             ..Default::default()
         };
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Caution { .. }));
     }
 
-    // --- Road criteria ---
+    #[test]
+    fn caution_when_river_flow_near_limit() {
+        // 9500cfs with max=10000cfs → within 10% (1000cfs margin) → CAUTION
+        let dest = make_dest_with(TripCriteria {
+            max_river_flow_cfs: Some(10000.0),
+            ..default_criteria()
+        });
+        let state = DomainState {
+            river: Some(river_gauge(8.0, 9500.0)),
+            ..Default::default()
+        };
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Caution { warnings } => {
+                assert!(warnings[0].contains("River flow"));
+            }
+            _ => panic!("expected Caution"),
+        }
+    }
+
+    // ── Road criteria ─────────────────────────────────────────────────────────
 
     #[test]
     fn no_go_when_road_closed() {
@@ -304,7 +515,7 @@ mod tests {
             road: Some(road_status("closed")),
             ..Default::default()
         };
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 1);
                 assert!(reasons[0].contains("SR-20"));
@@ -324,7 +535,7 @@ mod tests {
             road: Some(road_status("open")),
             ..Default::default()
         };
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
     }
 
     #[test]
@@ -337,40 +548,166 @@ mod tests {
             road: Some(road_status("closed")),
             ..Default::default()
         };
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
     }
 
-    // --- Missing data ---
+    #[test]
+    fn go_when_road_no_active_closures() {
+        let dest = make_dest_with(TripCriteria {
+            road_open_required: true,
+            ..default_criteria()
+        });
+        let state = DomainState {
+            road: Some(road_status("No active closures")),
+            ..Default::default()
+        };
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    // ── Missing data → UNKNOWN ────────────────────────────────────────────────
 
     #[test]
-    fn go_when_no_weather_data() {
+    fn unknown_when_no_weather_data_and_criteria_configured() {
         let dest = make_dest(Some(50.0), None);
         let state = DomainState::default();
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("weather")));
+            }
+            _ => panic!("expected Unknown"),
+        }
     }
 
     #[test]
-    fn go_when_no_river_data() {
+    fn unknown_when_no_river_data_and_criteria_configured() {
         let dest = make_dest_with(TripCriteria {
             max_river_level_ft: Some(12.0),
-            max_river_flow_cfs: Some(10000.0),
             ..default_criteria()
         });
         let state = DomainState::default();
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("river")));
+            }
+            _ => panic!("expected Unknown"),
+        }
     }
 
     #[test]
-    fn go_when_no_road_data_but_required() {
+    fn unknown_when_no_road_data_and_road_required() {
         let dest = make_dest_with(TripCriteria {
             road_open_required: true,
             ..default_criteria()
         });
         let state = DomainState::default();
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("road")));
+            }
+            _ => panic!("expected Unknown"),
+        }
     }
 
-    // --- Multiple blocking reasons ---
+    #[test]
+    fn go_when_no_criteria_configured_and_no_data() {
+        // No configured criteria → nothing to evaluate → GO regardless of data.
+        let dest = make_dest_with(default_criteria());
+        let state = DomainState::default();
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    #[test]
+    fn go_when_no_criteria_configured_with_data() {
+        let dest = make_dest_with(default_criteria());
+        let state = DomainState {
+            weather: Some(weather_obs(100.0)),
+            river: Some(river_gauge(50.0, 100000.0)),
+            road: Some(road_status("closed")),
+            ..Default::default()
+        };
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    // ── Stale data → UNKNOWN ──────────────────────────────────────────────────
+
+    #[test]
+    fn unknown_when_weather_stale() {
+        let dest = make_dest(Some(50.0), None);
+        // Data timestamp = 0, now = WEATHER_STALE_SECS + 1 → stale.
+        let state = DomainState {
+            weather: Some(weather_obs(65.0)), // passes criteria, but stale
+            ..Default::default()
+        };
+        let now = WEATHER_STALE_SECS + 1;
+        match evaluate(&dest, &state, now) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("stale")));
+            }
+            _ => panic!("expected Unknown"),
+        }
+    }
+
+    #[test]
+    fn unknown_when_river_stale() {
+        let dest = make_dest_with(TripCriteria {
+            max_river_level_ft: Some(12.0),
+            ..default_criteria()
+        });
+        let state = DomainState {
+            river: Some(river_gauge(8.0, 5000.0)), // passes, but stale
+            ..Default::default()
+        };
+        let now = RIVER_STALE_SECS + 1;
+        match evaluate(&dest, &state, now) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("stale")));
+            }
+            _ => panic!("expected Unknown"),
+        }
+    }
+
+    #[test]
+    fn unknown_when_road_stale() {
+        let dest = make_dest_with(TripCriteria {
+            road_open_required: true,
+            ..default_criteria()
+        });
+        let state = DomainState {
+            road: Some(road_status("open")), // passes, but stale
+            ..Default::default()
+        };
+        let now = ROAD_STALE_SECS + 1;
+        match evaluate(&dest, &state, now) {
+            TripDecision::Unknown { missing } => {
+                assert!(missing.iter().any(|m| m.contains("stale")));
+            }
+            _ => panic!("expected Unknown"),
+        }
+    }
+
+    // ── Priority: NO GO beats UNKNOWN ─────────────────────────────────────────
+
+    #[test]
+    fn no_go_beats_unknown_when_road_closed_and_weather_missing() {
+        let dest = make_dest_with(TripCriteria {
+            min_temp_f: Some(50.0), // weather needed but absent
+            road_open_required: true,
+            ..default_criteria()
+        });
+        let state = DomainState {
+            road: Some(road_status("closed")), // confirmed blocker
+            weather: None,                     // missing
+            ..Default::default()
+        };
+        match evaluate(&dest, &state, NOW) {
+            TripDecision::NoGo { reasons } => {
+                assert!(reasons.iter().any(|r| r.contains("SR-20")));
+            }
+            _ => panic!("expected NoGo"),
+        }
+    }
+
+    // ── Multiple blocking reasons ─────────────────────────────────────────────
 
     #[test]
     fn multiple_reasons_when_several_criteria_fail() {
@@ -386,7 +723,7 @@ mod tests {
             road: Some(road_status("closed")),
             ..Default::default()
         };
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 assert_eq!(reasons.len(), 3);
                 assert!(reasons[0].contains("Temperature"));
@@ -415,26 +752,12 @@ mod tests {
             road: Some(road_status("restricted")),
             ..Default::default()
         };
-        match evaluate(&dest, &state) {
+        match evaluate(&dest, &state, NOW) {
             TripDecision::NoGo { reasons } => {
                 // temp below min, precip too high, river level, river flow, road
                 assert_eq!(reasons.len(), 5);
             }
             _ => panic!("expected NoGo"),
         }
-    }
-
-    // --- No criteria configured ---
-
-    #[test]
-    fn go_when_no_criteria_configured() {
-        let dest = make_dest_with(default_criteria());
-        let state = DomainState {
-            weather: Some(weather_obs(100.0)),
-            river: Some(river_gauge(50.0, 100000.0)),
-            road: Some(road_status("closed")),
-            ..Default::default()
-        };
-        assert!(matches!(evaluate(&dest, &state), TripDecision::Go));
     }
 }

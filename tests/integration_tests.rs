@@ -15,11 +15,13 @@ use skagit_flats::domain::{
     DomainState, FerryStatus, RiverGauge, RoadStatus, TrailCondition, TripCriteria,
     WeatherObservation,
 };
+use skagit_flats::evaluation::current_unix_secs;
 use skagit_flats::web::build_router;
 
 /// Build a SharedState pre-populated with fixture domain data, simulating
 /// a running application that has received data from all sources.
 fn populated_state() -> Arc<SharedState> {
+    let now = current_unix_secs();
     let state = DomainState {
         weather: Some(WeatherObservation {
             temperature_f: 52.0,
@@ -27,29 +29,30 @@ fn populated_state() -> Arc<SharedState> {
             wind_direction: "SW".to_string(),
             sky_condition: "Mostly Cloudy".to_string(),
             precip_chance_pct: 20.0,
-            observation_time: 1711648800,
+            observation_time: now,
         }),
         river: Some(RiverGauge {
             site_id: "12200500".to_string(),
             site_name: "Skagit River Near Mount Vernon, WA".to_string(),
             water_level_ft: 11.87,
             streamflow_cfs: 8750.0,
-            timestamp: 1711648800,
+            timestamp: now,
         }),
         ferry: Some(FerryStatus {
             route: "Anacortes → Friday Harbor".to_string(),
             vessel_name: "MV Samish".to_string(),
-            estimated_departures: vec![1711652400, 1711659600, 1711666800],
+            estimated_departures: vec![now + 3600, now + 7200, now + 10800],
         }),
         trail: Some(TrailCondition {
             destination_name: "Cascade Pass".to_string(),
             suitability_summary: "[Caution] Snow above 5000ft".to_string(),
-            last_updated: 1711648800,
+            last_updated: now,
         }),
         road: Some(RoadStatus {
             road_name: "SR-20 North Cascades Hwy".to_string(),
             status: "Seasonal closure".to_string(),
             affected_segment: "MP 134 to MP 171".to_string(),
+            timestamp: now,
         }),
     };
 
@@ -118,6 +121,7 @@ fn populated_state() -> Arc<SharedState> {
     let panels = skagit_flats::presentation::build_panels_with_destinations(
         &state,
         &destinations.destinations,
+        0,
     );
     let pixel_buffer = skagit_flats::render::render_panels(&panels, 800, 480);
 
@@ -488,6 +492,7 @@ fn full_render_pipeline_fixture_data() {
             road_name: "SR-20".to_string(),
             status: "open".to_string(),
             affected_segment: String::new(),
+            timestamp: 1711648800,
         }),
     };
 
@@ -501,7 +506,7 @@ fn full_render_pipeline_fixture_data() {
         },
     }];
 
-    let panels = skagit_flats::presentation::build_panels_with_destinations(&state, &destinations);
+    let panels = skagit_flats::presentation::build_panels_with_destinations(&state, &destinations, 0);
     // Should have: weather, river, ferry, road, trip_decision = 5 panels
     assert_eq!(panels.len(), 5);
 

@@ -1,7 +1,7 @@
 use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
-use crate::evaluation::evaluate;
+use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
 use crate::render::render_display;
 use crate::sources::noaa::NoaaSource;
@@ -199,7 +199,7 @@ pub fn run(
 
     // Initial render with destinations.
     let buf = {
-        let layout = build_display_layout(&DomainState::default(), &destinations.destinations);
+        let layout = build_display_layout(&DomainState::default(), &destinations.destinations, current_unix_secs());
         render_display(&layout)
     };
     if let Err(e) = display.update(&buf, RefreshMode::Full) {
@@ -214,7 +214,7 @@ pub fn run(
 
     // Log destination decisions against current state.
     for dest in &destinations.destinations {
-        let decision = evaluate(dest, &DomainState::default());
+        let decision = evaluate(dest, &DomainState::default(), current_unix_secs());
         log::info!("destination '{}': {:?}", dest.name, decision);
     }
 
@@ -232,7 +232,7 @@ pub fn run(
             let buf = {
                 let domain = shared.domain_state.read().expect("domain_state lock poisoned");
                 let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-                let layout = build_display_layout(&domain, &dests.destinations);
+                let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
                 render_display(&layout)
             };
 
@@ -256,7 +256,7 @@ pub fn run(
                 let buf = {
                     let domain = shared.domain_state.read().expect("domain_state lock poisoned");
                     let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-                    let layout = build_display_layout(&domain, &dests.destinations);
+                    let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
                     render_display(&layout)
                 };
 
@@ -323,7 +323,7 @@ fn spawn_destinations_watcher(path: std::path::PathBuf, shared: Arc<SharedState>
                                     .destinations_config
                                     .read()
                                     .expect("destinations_config lock poisoned");
-                                let layout = build_display_layout(&domain, &dests.destinations);
+                                let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
                                 render_display(&layout)
                             };
 

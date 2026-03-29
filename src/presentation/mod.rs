@@ -75,10 +75,24 @@ pub fn format_road(road: &RoadStatus) -> Panel {
 pub fn format_trip_decision(destination: &str, decision: &TripDecision) -> Panel {
     match decision {
         TripDecision::Go => Panel::new(destination).with_row("GO".to_string()),
+        TripDecision::Caution { warnings } => {
+            let mut panel = Panel::new(destination).with_row("CAUTION".to_string());
+            for w in warnings {
+                panel.rows.push(format!("• {w}"));
+            }
+            panel
+        }
         TripDecision::NoGo { reasons } => {
             let mut panel = Panel::new(destination).with_row("NO GO".to_string());
             for r in reasons {
                 panel.rows.push(format!("• {r}"));
+            }
+            panel
+        }
+        TripDecision::Unknown { missing } => {
+            let mut panel = Panel::new(destination).with_row("UNKNOWN".to_string());
+            for m in missing {
+                panel.rows.push(format!("• {m}"));
             }
             panel
         }
@@ -87,7 +101,7 @@ pub fn format_trip_decision(destination: &str, decision: &TripDecision) -> Panel
 
 /// Build all panels from the current domain state.
 pub fn build_panels(state: &DomainState) -> Vec<Panel> {
-    build_panels_with_destinations(state, &[])
+    build_panels_with_destinations(state, &[], crate::evaluation::current_unix_secs())
 }
 
 /// Build all panels from the current domain state, including trip decision
@@ -95,6 +109,7 @@ pub fn build_panels(state: &DomainState) -> Vec<Panel> {
 pub fn build_panels_with_destinations(
     state: &DomainState,
     destinations: &[crate::config::Destination],
+    now_secs: u64,
 ) -> Vec<Panel> {
     let mut panels = Vec::new();
     if let Some(w) = &state.weather {
@@ -113,7 +128,7 @@ pub fn build_panels_with_destinations(
         panels.push(format_road(r));
     }
     for dest in destinations {
-        let decision = crate::evaluation::evaluate(dest, state);
+        let decision = crate::evaluation::evaluate(dest, state, now_secs);
         panels.push(format_trip_decision(&dest.name, &decision));
     }
     panels
@@ -211,11 +226,13 @@ pub struct HeaderContent {
     pub last_updated: Option<String>,
 }
 
-/// GO / NO-GO decision for the hero zone.
+/// Trip recommendation for the hero zone.
 #[derive(Debug, Clone)]
 pub enum HeroDecision {
     Go { destination: String },
+    Caution { destination: String, warnings: Vec<String> },
     NoGo { destination: String, reasons: Vec<String> },
+    Unknown { destination: String, missing: Vec<String> },
     /// Shown when no destinations are configured.
     AllGo,
 }
@@ -302,13 +319,14 @@ pub struct DisplayLayout {
 
 /// Build a [`DisplayLayout`] from current domain state and destinations.
 ///
-/// Destination decisions are evaluated and the worst-case (first NO-GO)
-/// is shown in the hero zone. All-GO results in `HeroDecision::AllGo` when
-/// no destinations are configured, or `HeroDecision::Go` for the first
-/// destination when all pass.
+/// Destination decisions are evaluated and the worst-case result is shown in
+/// the hero zone. Priority: NoGo > Unknown > Caution > Go. `AllGo` is shown
+/// when no destinations are configured. Pass `current_unix_secs()` for
+/// `now_secs` in production; pass a fixed value in tests.
 pub fn build_display_layout(
     state: &DomainState,
     destinations: &[crate::config::Destination],
+    now_secs: u64,
 ) -> DisplayLayout {
     let header = HeaderContent {
         app_name: "SKAGIT FLATS".to_string(),
@@ -335,16 +353,35 @@ pub fn build_display_layout(
     let decision = if destinations.is_empty() {
         HeroDecision::AllGo
     } else {
-        let mut result = None;
+        let mut result: Option<HeroDecision> = None;
         for dest in destinations {
-            let d = crate::evaluation::evaluate(dest, state);
+            let d = crate::evaluation::evaluate(dest, state, now_secs);
             match d {
                 crate::domain::TripDecision::NoGo { reasons } => {
                     result = Some(HeroDecision::NoGo {
                         destination: dest.name.clone(),
                         reasons,
                     });
-                    break;
+                    break; // NoGo is worst-case; stop looking
+                }
+                crate::domain::TripDecision::Unknown { missing } => {
+                    if !matches!(result, Some(HeroDecision::NoGo { .. })) {
+                        result = Some(HeroDecision::Unknown {
+                            destination: dest.name.clone(),
+                            missing,
+                        });
+                    }
+                }
+                crate::domain::TripDecision::Caution { warnings } => {
+                    if !matches!(
+                        result,
+                        Some(HeroDecision::NoGo { .. }) | Some(HeroDecision::Unknown { .. })
+                    ) {
+                        result = Some(HeroDecision::Caution {
+                            destination: dest.name.clone(),
+                            warnings,
+                        });
+                    }
                 }
                 crate::domain::TripDecision::Go => {
                     if result.is_none() {
@@ -461,6 +498,7 @@ mod tests {
             road_name: "SR-20".to_string(),
             status: "closed".to_string(),
             affected_segment: "Newhalem to Rainy Pass".to_string(),
+            timestamp: 0,
         }
     }
 
@@ -618,7 +656,7 @@ mod tests {
                 },
             },
         ];
-        let panels = build_panels_with_destinations(&state, &destinations);
+        let panels = build_panels_with_destinations(&state, &destinations, 0);
         // 1 weather panel + 2 destination panels
         assert_eq!(panels.len(), 3);
         assert_eq!(panels[1].title, "Skagit Loop");
@@ -692,7 +730,7 @@ mod tests {
     #[test]
     fn build_display_layout_empty_state() {
         let state = DomainState::default();
-        let layout = build_display_layout(&state, &[]);
+        let layout = build_display_layout(&state, &[], 0);
         assert_eq!(layout.header.app_name, "SKAGIT FLATS");
         assert!(layout.header.river_site.is_none());
         assert!(layout.hero.weather.is_none());
@@ -708,7 +746,7 @@ mod tests {
             weather: Some(sample_weather()),
             ..Default::default()
         };
-        let layout = build_display_layout(&state, &[]);
+        let layout = build_display_layout(&state, &[], 0);
         assert!(matches!(layout.hero.decision, HeroDecision::AllGo));
     }
 
@@ -725,7 +763,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let layout = build_display_layout(&state, &destinations);
+        let layout = build_display_layout(&state, &destinations, 0);
         assert!(matches!(layout.hero.decision, HeroDecision::Go { .. }));
     }
 
@@ -742,7 +780,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let layout = build_display_layout(&state, &destinations);
+        let layout = build_display_layout(&state, &destinations, 0);
         assert!(matches!(
             layout.hero.decision,
             HeroDecision::NoGo { .. }
@@ -755,7 +793,7 @@ mod tests {
             river: Some(sample_river()),
             ..Default::default()
         };
-        let layout = build_display_layout(&state, &[]);
+        let layout = build_display_layout(&state, &[], 0);
         let river = layout.data.river.expect("river should be present");
         assert!((river.level_ft - 11.87).abs() < 0.01);
         assert!((river.flow_cfs - 8750.0).abs() < 1.0);
@@ -768,7 +806,7 @@ mod tests {
             ferry: Some(sample_ferry()),
             ..Default::default()
         };
-        let layout = build_display_layout(&state, &[]);
+        let layout = build_display_layout(&state, &[], 0);
         let ferry = layout.data.ferry.expect("ferry should be present");
         assert_eq!(ferry.vessel_name, "MV Samish");
         // 3 departures → 3 formatted strings
@@ -784,7 +822,7 @@ mod tests {
             road: Some(sample_road()),
             ..Default::default()
         };
-        let layout = build_display_layout(&state, &[]);
+        let layout = build_display_layout(&state, &[], 0);
         let trail = layout.context.trail.expect("trail should be present");
         let road = layout.context.road.expect("road should be present");
         assert_eq!(trail.name, "Cascade Pass Trail");

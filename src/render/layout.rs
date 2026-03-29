@@ -523,6 +523,68 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
                 }
             }
         }
+        HeroDecision::Caution { destination: _, warnings } => {
+            let label = "CAUTION";
+            draw_text_scaled(
+                buf,
+                pad_x,
+                HERO_Y + 20,
+                label,
+                FontSize::Hero,
+                false,
+                HERO_LEFT_W - pad_x,
+            );
+            let reasons_y = HERO_Y + 20 + glyph_h + scale * 2;
+            let small_cell_h = FontSize::Small.cell_h();
+            let max_items = 4usize;
+            for (i, warning) in warnings.iter().take(max_items).enumerate() {
+                let ry = reasons_y + i as u32 * (small_cell_h + 2);
+                if ry + FontSize::Small.glyph_h() > HERO_Y + HERO_H {
+                    break;
+                }
+                fill_rect_xy(buf, pad_x, ry + 6, 6, 6, true);
+                draw_text_scaled(
+                    buf,
+                    pad_x + 10,
+                    ry,
+                    warning,
+                    FontSize::Small,
+                    false,
+                    HERO_LEFT_W - pad_x - 10,
+                );
+            }
+        }
+        HeroDecision::Unknown { destination: _, missing } => {
+            let label = "UNKNOWN";
+            draw_text_scaled(
+                buf,
+                pad_x,
+                HERO_Y + 20,
+                label,
+                FontSize::Hero,
+                false,
+                HERO_LEFT_W - pad_x,
+            );
+            let reasons_y = HERO_Y + 20 + glyph_h + scale * 2;
+            let small_cell_h = FontSize::Small.cell_h();
+            let max_items = 4usize;
+            for (i, item) in missing.iter().take(max_items).enumerate() {
+                let ry = reasons_y + i as u32 * (small_cell_h + 2);
+                if ry + FontSize::Small.glyph_h() > HERO_Y + HERO_H {
+                    break;
+                }
+                fill_rect_xy(buf, pad_x, ry + 6, 6, 6, false);
+                draw_text_scaled(
+                    buf,
+                    pad_x + 10,
+                    ry,
+                    item,
+                    FontSize::Small,
+                    false,
+                    HERO_LEFT_W - pad_x - 10,
+                );
+            }
+        }
     }
 }
 
