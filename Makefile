@@ -7,7 +7,7 @@ PI_HOST  ?= pi@skagit-flats.local
 PI_BIN   ?= /usr/local/bin/skagit-flats
 TARGET   ?= aarch64-unknown-linux-gnu
 
-.PHONY: build build-pi check-deps deploy install-service clean
+.PHONY: build build-pi check-deps deploy install-service setup-ssh clean
 
 # Verify cross-compilation prerequisites (rustup target, cross-compiler, rsync, ssh).
 check-deps:
@@ -38,6 +38,10 @@ install-service:
 		sudo chown skagit-flats:skagit-flats /etc/skagit-flats && \
 		sudo systemctl daemon-reload && \
 		sudo systemctl enable skagit-flats'
+
+# Copy your SSH public key to the Pi so subsequent make targets don't prompt for a password.
+setup-ssh:
+	ssh-copy-id $(PI_HOST)
 
 clean:
 	cargo clean

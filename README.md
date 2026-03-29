@@ -142,8 +142,25 @@ cargo build --release --target aarch64-unknown-linux-gnu --features hardware
 
 - Raspberry Pi Zero 2 W (or any Pi with SPI) running Raspberry Pi OS
 - SPI enabled: `sudo raspi-config` > Interface Options > SPI > Enable
-- SSH access configured
+- SSH key authentication configured (see below)
 - Cross-compilation toolchain: `rustup target add aarch64-unknown-linux-gnu`
+
+### SSH key setup
+
+`make deploy` and `make install-service` both use `rsync` and `ssh` to talk to
+the Pi. They will prompt for a password on every invocation unless you have SSH
+key authentication set up. To configure it once:
+
+```sh
+# Copy your public key to the Pi (you'll be asked for the password this one time)
+make setup-ssh PI_HOST=pi@your-pi.local
+```
+
+If you don't have an SSH key yet, generate one first:
+
+```sh
+ssh-keygen -t ed25519 -C "your-email@example.com"
+```
 
 ### First-time setup
 
