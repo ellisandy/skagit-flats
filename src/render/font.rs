@@ -10,12 +10,68 @@ pub const GLYPH_HEIGHT: u32 = 7;
 pub const CELL_WIDTH: u32 = 6;
 pub const CELL_HEIGHT: u32 = 9;
 
+/// Font size tiers for the multi-size rendering system.
+///
+/// Each tier is produced by integer upscaling of the base 5×7 glyph bitmap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontSize {
+    /// 14× scale → ~70×98 px glyphs (≈96 px cap height). Used for GO/NO-GO.
+    Hero,
+    /// 8× scale → 40×56 px glyphs. Used for temperatures, river level, ferry time.
+    Large,
+    /// 4× scale → 20×28 px glyphs. Used for flow rate, wind, vessel name.
+    Medium,
+    /// 3× scale → 15×21 px glyphs. Used for labels, trail/road status, reasons.
+    Small,
+    /// 2× scale → 10×14 px glyphs. Used for timestamps, site names.
+    Micro,
+}
+
+impl FontSize {
+    /// Integer pixel scale factor relative to the base 5×7 glyph.
+    pub fn scale(self) -> u32 {
+        match self {
+            FontSize::Hero => 14,
+            FontSize::Large => 8,
+            FontSize::Medium => 4,
+            FontSize::Small => 3,
+            FontSize::Micro => 2,
+        }
+    }
+
+    /// Rendered glyph width in pixels (not including inter-glyph spacing).
+    pub fn glyph_w(self) -> u32 {
+        GLYPH_WIDTH * self.scale()
+    }
+
+    /// Rendered glyph height in pixels.
+    pub fn glyph_h(self) -> u32 {
+        GLYPH_HEIGHT * self.scale()
+    }
+
+    /// Cell width including one column of right-side spacing.
+    pub fn cell_w(self) -> u32 {
+        self.glyph_w() + self.scale()
+    }
+
+    /// Cell height including one row of bottom spacing.
+    pub fn cell_h(self) -> u32 {
+        self.glyph_h() + self.scale()
+    }
+}
+
 /// Number of glyphs in the font (ASCII 32–126 inclusive).
 const GLYPH_COUNT: usize = 95;
+
+/// Degree sign (U+00B0): small 3×3 circle at top of glyph cell.
+static DEGREE_GLYPH: [u8; 7] = [0x06, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00];
 
 /// Return the 7-byte glyph bitmap for a character, or a filled rectangle
 /// for characters outside the printable ASCII range.
 pub fn glyph(ch: char) -> &'static [u8; 7] {
+    if ch == '\u{00B0}' {
+        return &DEGREE_GLYPH;
+    }
     let idx = ch as usize;
     if (32..=126).contains(&idx) {
         let offset = idx - 32;
@@ -244,9 +300,42 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_returns_replacement() {
+    fn degree_sign_returns_custom_glyph() {
         let g = glyph('\u{00B0}'); // degree sign
+        assert_eq!(g, &DEGREE_GLYPH);
+    }
+
+    #[test]
+    fn non_ascii_returns_replacement() {
+        let g = glyph('\u{0400}'); // Cyrillic Е — truly non-ASCII, not degree
         assert_eq!(g, &REPLACEMENT);
+    }
+
+    #[test]
+    fn font_size_scale_factors() {
+        assert_eq!(FontSize::Hero.scale(), 14);
+        assert_eq!(FontSize::Large.scale(), 8);
+        assert_eq!(FontSize::Medium.scale(), 4);
+        assert_eq!(FontSize::Small.scale(), 3);
+        assert_eq!(FontSize::Micro.scale(), 2);
+    }
+
+    #[test]
+    fn font_size_large_dims() {
+        // Large: 8× scale, glyph 40×56, cell 48×64
+        assert_eq!(FontSize::Large.glyph_w(), 40);
+        assert_eq!(FontSize::Large.glyph_h(), 56);
+        assert_eq!(FontSize::Large.cell_w(), 48);
+        assert_eq!(FontSize::Large.cell_h(), 64);
+    }
+
+    #[test]
+    fn font_size_medium_dims() {
+        // Medium: 4× scale, glyph 20×28, cell 24×32
+        assert_eq!(FontSize::Medium.glyph_w(), 20);
+        assert_eq!(FontSize::Medium.glyph_h(), 28);
+        assert_eq!(FontSize::Medium.cell_w(), 24);
+        assert_eq!(FontSize::Medium.cell_h(), 32);
     }
 
     #[test]

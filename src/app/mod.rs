@@ -2,8 +2,8 @@ use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::evaluate;
-use crate::presentation::build_panels_with_destinations;
-use crate::render::render_panels;
+use crate::presentation::build_display_layout;
+use crate::render::render_display;
 use crate::sources::noaa::NoaaSource;
 use crate::sources::usgs::UsgsSource;
 use crate::sources::wsdot::WsdotFerrySource;
@@ -198,11 +198,10 @@ pub fn run(
     spawn_destinations_watcher(opts.destinations_path.clone(), Arc::clone(&shared));
 
     // Initial render with destinations.
-    let panels = build_panels_with_destinations(
-        &DomainState::default(),
-        &destinations.destinations,
-    );
-    let buf = render_panels(&panels, config.display.width, config.display.height);
+    let buf = {
+        let layout = build_display_layout(&DomainState::default(), &destinations.destinations);
+        render_display(&layout)
+    };
     if let Err(e) = display.update(&buf, RefreshMode::Full) {
         log::error!("display update failed: {e}");
     }
@@ -230,12 +229,12 @@ pub fn run(
         let needs_full = last_full_refresh.elapsed() >= full_refresh_interval;
         if needs_full {
             log::info!("hourly full refresh to clear ghosting");
-            let domain = shared.domain_state.read().expect("domain_state lock poisoned");
-            let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-            let panels = build_panels_with_destinations(&domain, &dests.destinations);
-            let buf = render_panels(&panels, config.display.width, config.display.height);
-            drop(domain);
-            drop(dests);
+            let buf = {
+                let domain = shared.domain_state.read().expect("domain_state lock poisoned");
+                let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
+                let layout = build_display_layout(&domain, &dests.destinations);
+                render_display(&layout)
+            };
 
             if let Err(e) = display.update(&buf, RefreshMode::Full) {
                 log::error!("full refresh failed: {e}");
@@ -254,12 +253,12 @@ pub fn run(
                 }
 
                 // Re-render with current destinations.
-                let domain = shared.domain_state.read().expect("domain_state lock poisoned");
-                let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-                let panels = build_panels_with_destinations(&domain, &dests.destinations);
-                let buf = render_panels(&panels, config.display.width, config.display.height);
-                drop(domain);
-                drop(dests);
+                let buf = {
+                    let domain = shared.domain_state.read().expect("domain_state lock poisoned");
+                    let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
+                    let layout = build_display_layout(&domain, &dests.destinations);
+                    render_display(&layout)
+                };
 
                 // Use partial refresh for data updates (fast, ~0.3s).
                 if let Err(e) = display.update(&buf, RefreshMode::Partial) {
@@ -315,25 +314,18 @@ fn spawn_destinations_watcher(path: std::path::PathBuf, shared: Arc<SharedState>
                             drop(dests);
 
                             // Re-render with updated destinations.
-                            let domain = shared
-                                .domain_state
-                                .read()
-                                .expect("domain_state lock poisoned");
-                            let dests = shared
-                                .destinations_config
-                                .read()
-                                .expect("destinations_config lock poisoned");
-                            let panels = build_panels_with_destinations(
-                                &domain,
-                                &dests.destinations,
-                            );
-                            let buf = render_panels(
-                                &panels,
-                                shared.display_width,
-                                shared.display_height,
-                            );
-                            drop(domain);
-                            drop(dests);
+                            let buf = {
+                                let domain = shared
+                                    .domain_state
+                                    .read()
+                                    .expect("domain_state lock poisoned");
+                                let dests = shared
+                                    .destinations_config
+                                    .read()
+                                    .expect("destinations_config lock poisoned");
+                                let layout = build_display_layout(&domain, &dests.destinations);
+                                render_display(&layout)
+                            };
 
                             let mut pb = shared
                                 .pixel_buffer

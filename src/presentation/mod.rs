@@ -128,6 +128,289 @@ fn fmt_time(ts: u64) -> String {
     format!("{h:02}:{m:02}")
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Typed display model (new 4-zone layout)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Weather condition icon for the hero zone right column.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WeatherIcon {
+    Clear,
+    PartlyCloudy,
+    MostlyCloudy,
+    Overcast,
+    Rain,
+    HeavyRain,
+    Drizzle,
+    Snow,
+    Thunderstorm,
+    Fog,
+    Wind,
+}
+
+impl WeatherIcon {
+    /// Derive the icon from a sky-condition string.
+    pub fn from_sky_condition(sky: &str) -> Self {
+        let s = sky.to_lowercase();
+        if s.contains("thunder") || s.contains("storm") {
+            WeatherIcon::Thunderstorm
+        } else if s.contains("heavy rain") || s.contains("heavy shower") {
+            WeatherIcon::HeavyRain
+        } else if s.contains("drizzle") || s.contains("mist") {
+            WeatherIcon::Drizzle
+        } else if s.contains("rain") || s.contains("shower") {
+            WeatherIcon::Rain
+        } else if s.contains("snow") || s.contains("sleet") || s.contains("flurr") {
+            WeatherIcon::Snow
+        } else if s.contains("fog") || s.contains("haze") {
+            WeatherIcon::Fog
+        } else if s.contains("wind") {
+            WeatherIcon::Wind
+        } else if s.contains("overcast") {
+            WeatherIcon::Overcast
+        } else if s.contains("mostly cloudy") || s.contains("mostly cloud") {
+            WeatherIcon::MostlyCloudy
+        } else if s.contains("partly cloudy")
+            || s.contains("partly sunny")
+            || s.contains("partly cloud")
+        {
+            WeatherIcon::PartlyCloudy
+        } else if s.contains("cloudy") || s.contains("cloud") {
+            WeatherIcon::Overcast
+        } else {
+            WeatherIcon::Clear
+        }
+    }
+}
+
+/// River gauge trend arrow direction.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrendArrow {
+    Rising,
+    Falling,
+    Stable,
+}
+
+/// Sparkline data for the 24-hour river gauge trend.
+#[derive(Debug, Clone)]
+pub struct Sparkline {
+    /// Raw gauge readings, oldest first (up to 24 values).
+    pub values: Vec<f32>,
+    /// Optional flood-stage threshold to draw as a dashed line.
+    pub threshold: Option<f32>,
+}
+
+/// Content for the header strip (y=0, h=28).
+#[derive(Debug, Clone)]
+pub struct HeaderContent {
+    /// Left label — app or destination name.
+    pub app_name: String,
+    /// Optional center label — primary river site name.
+    pub river_site: Option<String>,
+    /// Optional right label — "Updated HH:MM".
+    pub last_updated: Option<String>,
+}
+
+/// GO / NO-GO decision for the hero zone.
+#[derive(Debug, Clone)]
+pub enum HeroDecision {
+    Go { destination: String },
+    NoGo { destination: String, reasons: Vec<String> },
+    /// Shown when no destinations are configured.
+    AllGo,
+}
+
+/// Weather content for the hero zone right column.
+#[derive(Debug, Clone)]
+pub struct WeatherContent {
+    pub icon: WeatherIcon,
+    pub temperature_f: f32,
+    pub sky_condition: String,
+    pub wind_dir: String,
+    pub wind_speed_mph: f32,
+    pub precip_chance_pct: f32,
+}
+
+/// Hero zone content (y=30, h=202).
+#[derive(Debug, Clone)]
+pub struct HeroContent {
+    pub decision: HeroDecision,
+    pub weather: Option<WeatherContent>,
+}
+
+/// River gauge content for the data zone left column.
+#[derive(Debug, Clone)]
+pub struct RiverContent {
+    pub site_name: String,
+    pub level_ft: f32,
+    pub flow_cfs: f32,
+    pub trend: TrendArrow,
+    pub sparkline: Option<Sparkline>,
+}
+
+/// Ferry status content for the data zone right column.
+#[derive(Debug, Clone)]
+pub struct FerryContent {
+    /// Short route description (e.g. "ANACORTES FERRY").
+    pub route: String,
+    pub vessel_name: String,
+    /// Departure times as "HH:MM" strings; first entry is the next departure.
+    pub departures: Vec<String>,
+}
+
+/// Data zone content (y=234, h=140).
+#[derive(Debug, Clone)]
+pub struct DataContent {
+    pub river: Option<RiverContent>,
+    pub ferry: Option<FerryContent>,
+}
+
+/// Trail condition for the context zone left column.
+#[derive(Debug, Clone)]
+pub struct TrailContent {
+    pub name: String,
+    pub condition: String,
+}
+
+/// Road status for the context zone right column.
+#[derive(Debug, Clone)]
+pub struct RoadContent {
+    pub name: String,
+    /// Human-readable status: "open", "closed", "restricted", etc.
+    pub status: String,
+    pub segment: String,
+}
+
+/// Context zone content (y=376, h=104).
+#[derive(Debug, Clone)]
+pub struct ContextContent {
+    pub trail: Option<TrailContent>,
+    pub road: Option<RoadContent>,
+}
+
+/// Full typed display layout for the redesigned 4-zone e-ink display.
+///
+/// Build this with [`build_display_layout`] and pass it to
+/// [`crate::render::render_display`].
+#[derive(Debug, Clone)]
+pub struct DisplayLayout {
+    pub header: HeaderContent,
+    pub hero: HeroContent,
+    pub data: DataContent,
+    pub context: ContextContent,
+}
+
+/// Build a [`DisplayLayout`] from current domain state and destinations.
+///
+/// Destination decisions are evaluated and the worst-case (first NO-GO)
+/// is shown in the hero zone. All-GO results in `HeroDecision::AllGo` when
+/// no destinations are configured, or `HeroDecision::Go` for the first
+/// destination when all pass.
+pub fn build_display_layout(
+    state: &DomainState,
+    destinations: &[crate::config::Destination],
+) -> DisplayLayout {
+    let header = HeaderContent {
+        app_name: "SKAGIT FLATS".to_string(),
+        river_site: state
+            .river
+            .as_ref()
+            .map(|r| shorten_site_name(&r.site_name)),
+        last_updated: state
+            .river
+            .as_ref()
+            .map(|r| fmt_time(r.timestamp))
+            .or_else(|| state.weather.as_ref().map(|w| fmt_time(w.observation_time))),
+    };
+
+    let weather = state.weather.as_ref().map(|w| WeatherContent {
+        icon: WeatherIcon::from_sky_condition(&w.sky_condition),
+        temperature_f: w.temperature_f,
+        sky_condition: w.sky_condition.clone(),
+        wind_dir: w.wind_direction.clone(),
+        wind_speed_mph: w.wind_speed_mph,
+        precip_chance_pct: w.precip_chance_pct,
+    });
+
+    let decision = if destinations.is_empty() {
+        HeroDecision::AllGo
+    } else {
+        let mut result = None;
+        for dest in destinations {
+            let d = crate::evaluation::evaluate(dest, state);
+            match d {
+                crate::domain::TripDecision::NoGo { reasons } => {
+                    result = Some(HeroDecision::NoGo {
+                        destination: dest.name.clone(),
+                        reasons,
+                    });
+                    break;
+                }
+                crate::domain::TripDecision::Go => {
+                    if result.is_none() {
+                        result = Some(HeroDecision::Go {
+                            destination: dest.name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        result.unwrap_or(HeroDecision::AllGo)
+    };
+
+    let hero = HeroContent { decision, weather };
+
+    let river = state.river.as_ref().map(|r| RiverContent {
+        site_name: shorten_site_name(&r.site_name),
+        level_ft: r.water_level_ft,
+        flow_cfs: r.streamflow_cfs,
+        trend: TrendArrow::Stable,
+        sparkline: None,
+    });
+
+    let ferry = state.ferry.as_ref().map(|f| FerryContent {
+        route: f.route.clone(),
+        vessel_name: f.vessel_name.clone(),
+        departures: f
+            .estimated_departures
+            .iter()
+            .take(3)
+            .map(|&ts| fmt_time(ts))
+            .collect(),
+    });
+
+    let data = DataContent { river, ferry };
+
+    let trail = state.trail.as_ref().map(|t| TrailContent {
+        name: t.destination_name.clone(),
+        condition: t.suitability_summary.clone(),
+    });
+
+    let road = state.road.as_ref().map(|r| RoadContent {
+        name: r.road_name.clone(),
+        status: r.status.clone(),
+        segment: r.affected_segment.clone(),
+    });
+
+    let context = ContextContent { trail, road };
+
+    DisplayLayout { header, hero, data, context }
+}
+
+/// Remove common verbose suffixes from USGS site names.
+fn shorten_site_name(name: &str) -> String {
+    let s = name
+        .trim_end_matches(", WA")
+        .trim_end_matches(", Washington")
+        .trim_end_matches(", Wa")
+        .trim_end_matches(" WA");
+    if s.len() > 32 {
+        format!("{}...", &s[..29])
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +643,159 @@ mod tests {
         assert_eq!(fmt_time(0), "00:00");
         // 23:59
         assert_eq!(fmt_time(86340), "23:59");
+    }
+
+    // ── New typed display model tests ──
+
+    #[test]
+    fn weather_icon_clear_conditions() {
+        assert_eq!(WeatherIcon::from_sky_condition("Sunny"), WeatherIcon::Clear);
+        assert_eq!(WeatherIcon::from_sky_condition("Clear"), WeatherIcon::Clear);
+    }
+
+    #[test]
+    fn weather_icon_rain_detection() {
+        assert_eq!(WeatherIcon::from_sky_condition("Rain"), WeatherIcon::Rain);
+        assert_eq!(
+            WeatherIcon::from_sky_condition("Heavy Rain"),
+            WeatherIcon::HeavyRain
+        );
+        assert_eq!(WeatherIcon::from_sky_condition("Drizzle"), WeatherIcon::Drizzle);
+    }
+
+    #[test]
+    fn weather_icon_cloud_variants() {
+        assert_eq!(
+            WeatherIcon::from_sky_condition("Mostly Cloudy"),
+            WeatherIcon::MostlyCloudy
+        );
+        assert_eq!(
+            WeatherIcon::from_sky_condition("Partly Cloudy"),
+            WeatherIcon::PartlyCloudy
+        );
+        assert_eq!(
+            WeatherIcon::from_sky_condition("Overcast"),
+            WeatherIcon::Overcast
+        );
+    }
+
+    #[test]
+    fn weather_icon_special_conditions() {
+        assert_eq!(
+            WeatherIcon::from_sky_condition("Thunderstorm"),
+            WeatherIcon::Thunderstorm
+        );
+        assert_eq!(WeatherIcon::from_sky_condition("Snow"), WeatherIcon::Snow);
+        assert_eq!(WeatherIcon::from_sky_condition("Fog"), WeatherIcon::Fog);
+    }
+
+    #[test]
+    fn build_display_layout_empty_state() {
+        let state = DomainState::default();
+        let layout = build_display_layout(&state, &[]);
+        assert_eq!(layout.header.app_name, "SKAGIT FLATS");
+        assert!(layout.header.river_site.is_none());
+        assert!(layout.hero.weather.is_none());
+        assert!(layout.data.river.is_none());
+        assert!(layout.data.ferry.is_none());
+        assert!(layout.context.trail.is_none());
+        assert!(layout.context.road.is_none());
+    }
+
+    #[test]
+    fn build_display_layout_no_destinations_shows_all_go() {
+        let state = DomainState {
+            weather: Some(sample_weather()),
+            ..Default::default()
+        };
+        let layout = build_display_layout(&state, &[]);
+        assert!(matches!(layout.hero.decision, HeroDecision::AllGo));
+    }
+
+    #[test]
+    fn build_display_layout_go_decision() {
+        let state = DomainState {
+            weather: Some(sample_weather()),
+            ..Default::default()
+        };
+        let destinations = vec![Destination {
+            name: "Test Loop".to_string(),
+            criteria: TripCriteria {
+                min_temp_f: Some(40.0),
+                ..Default::default()
+            },
+        }];
+        let layout = build_display_layout(&state, &destinations);
+        assert!(matches!(layout.hero.decision, HeroDecision::Go { .. }));
+    }
+
+    #[test]
+    fn build_display_layout_nogo_decision() {
+        let state = DomainState {
+            weather: Some(sample_weather()),
+            ..Default::default()
+        };
+        let destinations = vec![Destination {
+            name: "Cold Dest".to_string(),
+            criteria: TripCriteria {
+                min_temp_f: Some(80.0), // 52°F fails this
+                ..Default::default()
+            },
+        }];
+        let layout = build_display_layout(&state, &destinations);
+        assert!(matches!(
+            layout.hero.decision,
+            HeroDecision::NoGo { .. }
+        ));
+    }
+
+    #[test]
+    fn build_display_layout_river_content() {
+        let state = DomainState {
+            river: Some(sample_river()),
+            ..Default::default()
+        };
+        let layout = build_display_layout(&state, &[]);
+        let river = layout.data.river.expect("river should be present");
+        assert!((river.level_ft - 11.87).abs() < 0.01);
+        assert!((river.flow_cfs - 8750.0).abs() < 1.0);
+        assert_eq!(river.trend, TrendArrow::Stable);
+    }
+
+    #[test]
+    fn build_display_layout_ferry_departures() {
+        let state = DomainState {
+            ferry: Some(sample_ferry()),
+            ..Default::default()
+        };
+        let layout = build_display_layout(&state, &[]);
+        let ferry = layout.data.ferry.expect("ferry should be present");
+        assert_eq!(ferry.vessel_name, "MV Samish");
+        // 3 departures → 3 formatted strings
+        assert_eq!(ferry.departures.len(), 3);
+        // 37800 = 10:30
+        assert_eq!(ferry.departures[0], "10:30");
+    }
+
+    #[test]
+    fn build_display_layout_context_trail_road() {
+        let state = DomainState {
+            trail: Some(sample_trail()),
+            road: Some(sample_road()),
+            ..Default::default()
+        };
+        let layout = build_display_layout(&state, &[]);
+        let trail = layout.context.trail.expect("trail should be present");
+        let road = layout.context.road.expect("road should be present");
+        assert_eq!(trail.name, "Cascade Pass Trail");
+        assert!(road.status.contains("closed"));
+    }
+
+    #[test]
+    fn shorten_site_name_strips_wa_suffix() {
+        assert_eq!(
+            shorten_site_name("Skagit River Near Mount Vernon, WA"),
+            "Skagit River Near Mount Vernon"
+        );
     }
 }

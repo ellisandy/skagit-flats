@@ -1,7 +1,7 @@
 pub mod font;
 mod layout;
 
-use crate::presentation::Panel;
+use crate::presentation::{DisplayLayout, Panel};
 
 /// A 1-bit pixel buffer representing what the e-ink display shows.
 ///
@@ -102,6 +102,15 @@ pub fn render(panels: &[Panel]) -> PixelBuffer {
 pub fn render_panels(panels: &[Panel], width: u32, height: u32) -> PixelBuffer {
     let mut buf = PixelBuffer::new(width, height);
     layout::layout_and_render(panels, &mut buf);
+    buf
+}
+
+/// Render a typed [`DisplayLayout`] into a 800×480 1-bit pixel buffer.
+///
+/// This is the primary render entry point for the new 4-zone e-ink display design.
+pub fn render_display(layout: &DisplayLayout) -> PixelBuffer {
+    let mut buf = PixelBuffer::new(800, 480);
+    layout::layout_and_render_display(layout, &mut buf);
     buf
 }
 

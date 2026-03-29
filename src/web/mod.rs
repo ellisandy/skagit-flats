@@ -10,8 +10,8 @@ use crate::app::SharedState;
 use crate::config::{Destination, DestinationsConfig};
 use crate::domain::TripCriteria;
 use crate::evaluation::evaluate;
-use crate::presentation::build_panels_with_destinations;
-use crate::render::render_panels;
+use crate::presentation::build_display_layout;
+use crate::render::render_display;
 
 /// Build the axum Router for the local web interface.
 pub fn build_router(state: Arc<SharedState>) -> Router {
@@ -192,17 +192,18 @@ fn set_source_enabled(state: &SharedState, name: &str, enabled: bool) -> impl In
 
 /// Re-render the pixel buffer after a destinations change.
 fn re_render(state: &SharedState) {
-    let dests = state
-        .destinations_config
-        .read()
-        .expect("destinations_config lock poisoned");
-    let domain = state
-        .domain_state
-        .read()
-        .expect("domain_state lock poisoned");
-
-    let panels = build_panels_with_destinations(&domain, &dests.destinations);
-    let buf = render_panels(&panels, state.display_width, state.display_height);
+    let buf = {
+        let dests = state
+            .destinations_config
+            .read()
+            .expect("destinations_config lock poisoned");
+        let domain = state
+            .domain_state
+            .read()
+            .expect("domain_state lock poisoned");
+        let layout = build_display_layout(&domain, &dests.destinations);
+        render_display(&layout)
+    };
 
     let mut pixel_buffer = state
         .pixel_buffer
