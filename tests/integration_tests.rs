@@ -60,6 +60,7 @@ fn populated_state() -> Arc<SharedState> {
         destinations: vec![
             Destination {
                 name: "Skagit Flats Loop".to_string(),
+                signals: Default::default(),
                 criteria: TripCriteria {
                     min_temp_f: Some(40.0),
                     max_temp_f: Some(90.0),
@@ -70,6 +71,7 @@ fn populated_state() -> Arc<SharedState> {
             },
             Destination {
                 name: "North Cascades".to_string(),
+                signals: Default::default(),
                 criteria: TripCriteria {
                     min_temp_f: Some(45.0),
                     road_open_required: true,
@@ -498,6 +500,7 @@ fn full_render_pipeline_fixture_data() {
 
     let destinations = vec![Destination {
         name: "Test Trip".to_string(),
+        signals: Default::default(),
         criteria: TripCriteria {
             min_temp_f: Some(40.0),
             max_river_level_ft: Some(15.0),

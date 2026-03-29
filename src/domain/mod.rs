@@ -55,6 +55,55 @@ pub struct RoadStatus {
     pub timestamp: u64,
 }
 
+/// Which data signals are relevant for a given destination.
+///
+/// Controls both which source panels appear in the planning view and which
+/// criteria checks are applied during evaluation. Setting a signal to `false`
+/// suppresses it entirely for that destination — even if a criterion threshold
+/// is configured.
+///
+/// Weather is always relevant; the remaining signals default to `true` for
+/// backward compatibility. Explicitly set unused signals to `false` in
+/// `destinations.toml` so the display omits them for that destination.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelevantSignals {
+    /// Temperature, precipitation, wind. Always meaningful.
+    #[serde(default = "signal_default_true")]
+    pub weather: bool,
+    /// River gauge — flooding and streamflow data.
+    /// Relevant for lowland or valley destinations at flood risk.
+    #[serde(default = "signal_default_true")]
+    pub river: bool,
+    /// Ferry schedule and vessel status.
+    /// Relevant for island or ferry-dependent destinations.
+    #[serde(default = "signal_default_true")]
+    pub ferry: bool,
+    /// Trail and campsite conditions.
+    /// Relevant for hiking or camping destinations.
+    #[serde(default = "signal_default_true")]
+    pub trail: bool,
+    /// Road access and closure status.
+    /// Relevant for destinations with seasonal or closure-prone roads.
+    #[serde(default = "signal_default_true")]
+    pub road: bool,
+}
+
+fn signal_default_true() -> bool {
+    true
+}
+
+impl Default for RelevantSignals {
+    fn default() -> Self {
+        RelevantSignals {
+            weather: true,
+            river: true,
+            ferry: true,
+            trail: true,
+            road: true,
+        }
+    }
+}
+
 /// Per-destination go/no-go thresholds, loaded from destinations.toml.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TripCriteria {

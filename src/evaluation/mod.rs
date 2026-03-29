@@ -37,14 +37,16 @@ fn is_stale(data_ts: u64, now_secs: u64, threshold: u64) -> bool {
 /// Pass `current_unix_secs()` in production; pass a fixed value in tests.
 pub fn evaluate(destination: &Destination, state: &DomainState, now_secs: u64) -> TripDecision {
     let criteria = &destination.criteria;
+    let signals = &destination.signals;
     let mut reasons: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     // ── Weather ──────────────────────────────────────────────────────────────
-    let needs_weather = criteria.min_temp_f.is_some()
-        || criteria.max_temp_f.is_some()
-        || criteria.max_precip_chance_pct.is_some();
+    let needs_weather = signals.weather
+        && (criteria.min_temp_f.is_some()
+            || criteria.max_temp_f.is_some()
+            || criteria.max_precip_chance_pct.is_some());
 
     if needs_weather {
         match &state.weather {
@@ -101,8 +103,8 @@ pub fn evaluate(destination: &Destination, state: &DomainState, now_secs: u64) -
     }
 
     // ── River ────────────────────────────────────────────────────────────────
-    let needs_river =
-        criteria.max_river_level_ft.is_some() || criteria.max_river_flow_cfs.is_some();
+    let needs_river = signals.river
+        && (criteria.max_river_level_ft.is_some() || criteria.max_river_flow_cfs.is_some());
 
     if needs_river {
         match &state.river {
@@ -143,7 +145,7 @@ pub fn evaluate(destination: &Destination, state: &DomainState, now_secs: u64) -
     }
 
     // ── Road ─────────────────────────────────────────────────────────────────
-    if criteria.road_open_required {
+    if signals.road && criteria.road_open_required {
         match &state.road {
             None => missing.push("No road data".to_string()),
             Some(rd) if is_stale(rd.timestamp, now_secs, ROAD_STALE_SECS) => {
@@ -210,6 +212,7 @@ mod tests {
     fn make_dest_with(criteria: TripCriteria) -> Destination {
         Destination {
             name: "Test".to_string(),
+            signals: Default::default(),
             criteria,
         }
     }
@@ -758,6 +761,79 @@ mod tests {
                 assert_eq!(reasons.len(), 5);
             }
             _ => panic!("expected NoGo"),
+        }
+    }
+
+    // --- Signal relevance ---
+
+    #[test]
+    fn weather_signal_disabled_skips_weather_criteria() {
+        use crate::domain::RelevantSignals;
+        let dest = make_dest_with_signals(
+            TripCriteria {
+                min_temp_f: Some(80.0), // would normally block at 40°F
+                ..default_criteria()
+            },
+            RelevantSignals {
+                weather: false,
+                ..Default::default()
+            },
+        );
+        let state = weather_state(40.0);
+        // weather signal is off — temperature criteria are skipped → Go
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    #[test]
+    fn river_signal_disabled_skips_river_criteria() {
+        use crate::domain::RelevantSignals;
+        let dest = make_dest_with_signals(
+            TripCriteria {
+                max_river_level_ft: Some(5.0), // would block at 20ft
+                ..default_criteria()
+            },
+            RelevantSignals {
+                river: false,
+                ..Default::default()
+            },
+        );
+        let state = DomainState {
+            river: Some(river_gauge(20.0, 50000.0)),
+            ..Default::default()
+        };
+        // river signal is off — level criteria are skipped → Go
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    #[test]
+    fn road_signal_disabled_skips_road_criteria() {
+        use crate::domain::RelevantSignals;
+        let dest = make_dest_with_signals(
+            TripCriteria {
+                road_open_required: true,
+                ..default_criteria()
+            },
+            RelevantSignals {
+                road: false,
+                ..Default::default()
+            },
+        );
+        let state = DomainState {
+            road: Some(road_status("closed")),
+            ..Default::default()
+        };
+        // road signal is off — road criteria are skipped → Go
+        assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    fn make_dest_with_signals(
+        criteria: TripCriteria,
+        signals: crate::domain::RelevantSignals,
+    ) -> Destination {
+        Destination {
+            name: "Test".to_string(),
+            signals,
+            criteria,
         }
     }
 }

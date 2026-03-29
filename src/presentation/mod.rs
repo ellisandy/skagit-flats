@@ -397,37 +397,62 @@ pub fn build_display_layout(
 
     let hero = HeroContent { decision, weather };
 
-    let river = state.river.as_ref().map(|r| RiverContent {
-        site_name: shorten_site_name(&r.site_name),
-        level_ft: r.water_level_ft,
-        flow_cfs: r.streamflow_cfs,
-        trend: TrendArrow::Stable,
-        sparkline: None,
-    });
+    // Determine which signals are relevant across all configured destinations.
+    // When no destinations are configured, all signals are shown.
+    // When destinations are configured, only show signals that at least one
+    // destination declares relevant — avoiding clutter from unrelated sources.
+    let any_river = destinations.is_empty() || destinations.iter().any(|d| d.signals.river);
+    let any_ferry = destinations.is_empty() || destinations.iter().any(|d| d.signals.ferry);
+    let any_trail = destinations.is_empty() || destinations.iter().any(|d| d.signals.trail);
+    let any_road = destinations.is_empty() || destinations.iter().any(|d| d.signals.road);
 
-    let ferry = state.ferry.as_ref().map(|f| FerryContent {
-        route: f.route.clone(),
-        vessel_name: f.vessel_name.clone(),
-        departures: f
-            .estimated_departures
-            .iter()
-            .take(3)
-            .map(|&ts| fmt_time(ts))
-            .collect(),
-    });
+    let river = if any_river {
+        state.river.as_ref().map(|r| RiverContent {
+            site_name: shorten_site_name(&r.site_name),
+            level_ft: r.water_level_ft,
+            flow_cfs: r.streamflow_cfs,
+            trend: TrendArrow::Stable,
+            sparkline: None,
+        })
+    } else {
+        None
+    };
+
+    let ferry = if any_ferry {
+        state.ferry.as_ref().map(|f| FerryContent {
+            route: f.route.clone(),
+            vessel_name: f.vessel_name.clone(),
+            departures: f
+                .estimated_departures
+                .iter()
+                .take(3)
+                .map(|&ts| fmt_time(ts))
+                .collect(),
+        })
+    } else {
+        None
+    };
 
     let data = DataContent { river, ferry };
 
-    let trail = state.trail.as_ref().map(|t| TrailContent {
-        name: t.destination_name.clone(),
-        condition: t.suitability_summary.clone(),
-    });
+    let trail = if any_trail {
+        state.trail.as_ref().map(|t| TrailContent {
+            name: t.destination_name.clone(),
+            condition: t.suitability_summary.clone(),
+        })
+    } else {
+        None
+    };
 
-    let road = state.road.as_ref().map(|r| RoadContent {
-        name: r.road_name.clone(),
-        status: r.status.clone(),
-        segment: r.affected_segment.clone(),
-    });
+    let road = if any_road {
+        state.road.as_ref().map(|r| RoadContent {
+            name: r.road_name.clone(),
+            status: r.status.clone(),
+            segment: r.affected_segment.clone(),
+        })
+    } else {
+        None
+    };
 
     let context = ContextContent { trail, road };
 
@@ -643,6 +668,7 @@ mod tests {
         let destinations = vec![
             Destination {
                 name: "Skagit Loop".to_string(),
+                signals: Default::default(),
                 criteria: TripCriteria {
                     min_temp_f: Some(40.0),
                     ..Default::default()
@@ -650,6 +676,7 @@ mod tests {
             },
             Destination {
                 name: "Baker Lake".to_string(),
+                signals: Default::default(),
                 criteria: TripCriteria {
                     max_temp_f: Some(90.0),
                     ..Default::default()
@@ -758,6 +785,7 @@ mod tests {
         };
         let destinations = vec![Destination {
             name: "Test Loop".to_string(),
+            signals: Default::default(),
             criteria: TripCriteria {
                 min_temp_f: Some(40.0),
                 ..Default::default()
@@ -775,6 +803,7 @@ mod tests {
         };
         let destinations = vec![Destination {
             name: "Cold Dest".to_string(),
+            signals: Default::default(),
             criteria: TripCriteria {
                 min_temp_f: Some(80.0), // 52°F fails this
                 ..Default::default()
@@ -835,5 +864,105 @@ mod tests {
             shorten_site_name("Skagit River Near Mount Vernon, WA"),
             "Skagit River Near Mount Vernon"
         );
+    }
+
+    // ── Signal relevance filtering in build_display_layout ──
+
+    #[test]
+    fn river_hidden_when_no_destination_has_river_relevant() {
+        use crate::domain::RelevantSignals;
+        let state = DomainState {
+            river: Some(sample_river()),
+            ..Default::default()
+        };
+        let destinations = vec![Destination {
+            name: "Island Trip".to_string(),
+            signals: RelevantSignals {
+                weather: true,
+                river: false,
+                ferry: true,
+                trail: false,
+                road: false,
+            },
+            criteria: Default::default(),
+        }];
+        let layout = build_display_layout(&state, &destinations, 0);
+        // river data exists but no destination considers it relevant → hidden
+        assert!(layout.data.river.is_none());
+    }
+
+    #[test]
+    fn river_shown_when_any_destination_has_river_relevant() {
+        use crate::domain::RelevantSignals;
+        let state = DomainState {
+            river: Some(sample_river()),
+            ..Default::default()
+        };
+        let destinations = vec![
+            Destination {
+                name: "Island Trip".to_string(),
+                signals: RelevantSignals {
+                    weather: true,
+                    river: false,
+                    ferry: true,
+                    trail: false,
+                    road: false,
+                },
+                criteria: Default::default(),
+            },
+            Destination {
+                name: "Valley Loop".to_string(),
+                signals: RelevantSignals {
+                    weather: true,
+                    river: true,
+                    ferry: false,
+                    trail: false,
+                    road: true,
+                },
+                criteria: Default::default(),
+            },
+        ];
+        let layout = build_display_layout(&state, &destinations, 0);
+        // at least one destination has river relevant → river shown
+        assert!(layout.data.river.is_some());
+    }
+
+    #[test]
+    fn all_signals_shown_when_no_destinations_configured() {
+        let state = DomainState {
+            river: Some(sample_river()),
+            ferry: Some(sample_ferry()),
+            trail: Some(sample_trail()),
+            road: Some(sample_road()),
+            ..Default::default()
+        };
+        let layout = build_display_layout(&state, &[], 0);
+        // no destinations → full dashboard mode → all signals shown
+        assert!(layout.data.river.is_some());
+        assert!(layout.data.ferry.is_some());
+        assert!(layout.context.trail.is_some());
+        assert!(layout.context.road.is_some());
+    }
+
+    #[test]
+    fn ferry_hidden_when_no_destination_has_ferry_relevant() {
+        use crate::domain::RelevantSignals;
+        let state = DomainState {
+            ferry: Some(sample_ferry()),
+            ..Default::default()
+        };
+        let destinations = vec![Destination {
+            name: "Mountain Hike".to_string(),
+            signals: RelevantSignals {
+                weather: true,
+                river: false,
+                ferry: false,
+                trail: true,
+                road: true,
+            },
+            criteria: Default::default(),
+        }];
+        let layout = build_display_layout(&state, &destinations, 0);
+        assert!(layout.data.ferry.is_none());
     }
 }

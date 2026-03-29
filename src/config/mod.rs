@@ -1,4 +1,4 @@
-use crate::domain::TripCriteria;
+use crate::domain::{RelevantSignals, TripCriteria};
 use serde::Deserialize;
 use std::path::Path;
 use thiserror::Error;
@@ -120,10 +120,14 @@ pub struct DestinationsConfig {
     pub destinations: Vec<Destination>,
 }
 
-/// A single trip destination with its go/no-go criteria.
+/// A single trip destination with its relevant signals and go/no-go criteria.
 #[derive(Debug, Deserialize, serde::Serialize, Clone)]
 pub struct Destination {
     pub name: String,
+    /// Which data signals matter for this destination.
+    /// Controls display filtering and evaluation scope.
+    #[serde(default)]
+    pub signals: RelevantSignals,
     pub criteria: TripCriteria,
 }
 
@@ -348,6 +352,7 @@ max_river_level_ft = 15.0
         let config = DestinationsConfig {
             destinations: vec![Destination {
                 name: "Test".to_string(),
+                signals: Default::default(),
                 criteria: crate::domain::TripCriteria {
                     min_temp_f: Some(45.0),
                     max_temp_f: Some(85.0),

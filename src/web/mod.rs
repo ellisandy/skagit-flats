@@ -8,7 +8,7 @@ use axum::{Json, Router};
 
 use crate::app::SharedState;
 use crate::config::{Destination, DestinationsConfig};
-use crate::domain::TripCriteria;
+use crate::domain::{RelevantSignals, TripCriteria};
 use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
 use crate::render::render_display;
@@ -96,6 +96,8 @@ async fn handler_list_destinations(
 #[derive(Debug, serde::Deserialize)]
 struct DestinationRequest {
     name: String,
+    #[serde(default)]
+    signals: RelevantSignals,
     criteria: TripCriteria,
 }
 
@@ -115,10 +117,12 @@ async fn handler_upsert_destination(
             .expect("destinations_config lock poisoned");
 
         if let Some(existing) = dests.destinations.iter_mut().find(|d| d.name == req.name) {
+            existing.signals = req.signals;
             existing.criteria = req.criteria;
         } else {
             dests.destinations.push(Destination {
                 name: req.name,
+                signals: req.signals,
                 criteria: req.criteria,
             });
         }
