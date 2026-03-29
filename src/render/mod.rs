@@ -114,6 +114,16 @@ pub fn render_display(layout: &DisplayLayout) -> PixelBuffer {
     buf
 }
 
+/// Render a startup/loading screen for the 800×480 e-ink display.
+///
+/// Use this for the initial display update on first boot, before any data sources
+/// have completed their first fetch. Transitions to the live layout when data arrives.
+pub fn render_startup() -> PixelBuffer {
+    let mut buf = PixelBuffer::new(800, 480);
+    layout::layout_and_render_startup(&mut buf);
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +211,26 @@ mod tests {
         let buf = render_panels(&[], 800, 480);
         assert_eq!(buf.width, 800);
         assert_eq!(buf.height, 480);
+    }
+
+    #[test]
+    fn render_startup_has_correct_dimensions() {
+        let buf = render_startup();
+        assert_eq!(buf.width, 800);
+        assert_eq!(buf.height, 480);
+    }
+
+    #[test]
+    fn render_startup_has_pixels() {
+        // Startup screen should draw header text and loading message — not blank.
+        let buf = render_startup();
+        assert!(buf.pixels.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn render_startup_has_header_divider() {
+        // Header divider is drawn at y=28–29.
+        let buf = render_startup();
+        assert!(buf.get_pixel(0, 28));
     }
 }

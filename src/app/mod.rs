@@ -3,7 +3,7 @@ use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
 use crate::domain::{DataPoint, DomainState};
 use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
-use crate::render::render_display;
+use crate::render::{render_display, render_startup};
 use crate::sources::noaa::NoaaSource;
 use crate::sources::usgs::UsgsSource;
 use crate::sources::wsdot::WsdotFerrySource;
@@ -197,19 +197,16 @@ pub fn run(
     // Spawn file watcher for destinations.toml.
     spawn_destinations_watcher(opts.destinations_path.clone(), Arc::clone(&shared));
 
-    // Initial render with destinations.
-    let buf = {
-        let layout = build_display_layout(&DomainState::default(), &destinations.destinations, current_unix_secs());
-        render_display(&layout)
-    };
-    if let Err(e) = display.update(&buf, RefreshMode::Full) {
+    // Initial render: show startup placeholder while sources complete first fetch.
+    let startup_buf = render_startup();
+    if let Err(e) = display.update(&startup_buf, RefreshMode::Full) {
         log::error!("display update failed: {e}");
     }
 
-    // Update shared pixel buffer with initial render.
+    // Update shared pixel buffer with startup render.
     {
         let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
-        *pb = buf;
+        *pb = startup_buf;
     }
 
     // Log destination decisions against current state.

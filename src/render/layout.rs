@@ -1063,6 +1063,31 @@ pub fn layout_and_render_display(layout: &DisplayLayout, buf: &mut PixelBuffer) 
     render_context(buf, layout);
 }
 
+/// Render a startup/loading screen for the 800×480 e-ink display.
+///
+/// Shown on first boot while data sources complete their initial fetch.
+/// Displays the app name in the header and a centered "Loading data..." message.
+pub fn layout_and_render_startup(buf: &mut PixelBuffer) {
+    let pad_x = 16u32;
+    let pad_y = (HEADER_H.saturating_sub(FontSize::Small.glyph_h())) / 2;
+
+    // Header: app name
+    draw_text_scaled(buf, pad_x, HEADER_Y + pad_y, "SKAGIT FLATS", FontSize::Small, false, 400);
+
+    // Header divider
+    hline(buf, 0, HEADER_H, 800, DIVIDER_H);
+
+    // Center "Loading data..." in the area below the header
+    let body_y = HEADER_H + DIVIDER_H;
+    let body_h = 480u32.saturating_sub(body_y);
+    let text = "Loading data...";
+    let text_w = text.len() as u32 * FontSize::Medium.cell_w();
+    let text_h = FontSize::Medium.glyph_h();
+    let x = (800u32.saturating_sub(text_w)) / 2;
+    let y = body_y + (body_h.saturating_sub(text_h)) / 2;
+    draw_text_scaled(buf, x, y, text, FontSize::Medium, false, 800);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
