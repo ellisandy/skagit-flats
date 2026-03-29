@@ -132,6 +132,62 @@ pub enum TripDecision {
     Unknown { missing: Vec<String> },
 }
 
+/// A single evaluated criterion — used in the planning view.
+///
+/// Each `EvalFactor` represents one configured threshold that was checked against
+/// live data. The planning view uses these to show a structured breakdown of why
+/// the recommendation is GO or NO GO.
+#[derive(Debug, Clone, Serialize)]
+pub struct EvalFactor {
+    /// Short label, e.g. "Temperature", "River level".
+    pub name: String,
+    /// Formatted actual value, e.g. "14.2 ft".
+    pub actual: String,
+    /// Formatted threshold, e.g. "≤ 12.0 ft".
+    pub threshold: String,
+    /// Human-readable verdict, e.g. "14.2 ft — 2.2 ft over limit".
+    pub detail: String,
+}
+
+/// A criterion that could not be evaluated because the required data source has
+/// not yet produced a reading.
+#[derive(Debug, Clone, Serialize)]
+pub struct UncheckedCriterion {
+    /// Criterion label, e.g. "Min temperature".
+    pub criterion: String,
+    /// Which source is missing, e.g. "Weather".
+    pub missing_source: String,
+}
+
+/// Full structured evaluation result for the planning view.
+///
+/// Unlike `TripDecision`, this carries the breakdown of all checked and
+/// unchecked criteria so the planning view can render hero + detail separately.
+#[derive(Debug, Clone, Serialize)]
+pub struct EvaluationDetail {
+    /// The binary recommendation.
+    pub decision: TripDecision,
+    /// Criteria that are currently blocking GO.
+    pub blockers: Vec<EvalFactor>,
+    /// Criteria that passed.
+    pub passing: Vec<EvalFactor>,
+    /// Criteria that could not be checked due to missing source data.
+    pub unchecked: Vec<UncheckedCriterion>,
+    /// Data freshness for each source, in seconds since last update.
+    /// `None` means the source has never produced a reading.
+    pub source_age_secs: SourceAge,
+}
+
+/// Per-source data age (seconds since last reading, or None if never received).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SourceAge {
+    pub weather_secs: Option<u64>,
+    pub river_secs: Option<u64>,
+    pub ferry_secs: Option<u64>,
+    pub trail_secs: Option<u64>,
+    pub road_secs: Option<u64>,
+}
+
 /// All possible outputs from a data source.
 #[derive(Debug, Clone)]
 pub enum DataPoint {

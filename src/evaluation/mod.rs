@@ -1,5 +1,5 @@
 use crate::config::Destination;
-use crate::domain::{DomainState, TripDecision};
+use crate::domain::{DomainState, EvalFactor, EvaluationDetail, SourceAge, TripDecision, UncheckedCriterion};
 
 // ─── Staleness thresholds ────────────────────────────────────────────────────
 // Data older than these limits (in seconds) causes an UNKNOWN result for any
@@ -175,6 +175,189 @@ pub fn evaluate(destination: &Destination, state: &DomainState, now_secs: u64) -
     }
     // 4. GO.
     TripDecision::Go
+}
+
+/// Full structured evaluation result for the planning view.
+///
+/// Where `evaluate` returns a single `TripDecision`, `evaluate_detail` returns
+/// the complete breakdown: which criteria blocked, which passed, and which
+/// could not be checked due to absent or stale data. The planning view uses
+/// this to render a hero recommendation alongside supporting detail.
+///
+/// `now_secs` is a Unix timestamp (seconds) — pass `current_unix_secs()` in
+/// production, or a fixed value in tests.
+pub fn evaluate_detail(destination: &Destination, state: &DomainState, now_secs: u64) -> EvaluationDetail {
+    let criteria = &destination.criteria;
+    let signals = &destination.signals;
+    let mut blockers: Vec<EvalFactor> = Vec::new();
+    let mut passing: Vec<EvalFactor> = Vec::new();
+    let mut unchecked: Vec<UncheckedCriterion> = Vec::new();
+
+    // ── Weather ──────────────────────────────────────────────────────────────
+    let needs_weather = signals.weather
+        && (criteria.min_temp_f.is_some()
+            || criteria.max_temp_f.is_some()
+            || criteria.max_precip_chance_pct.is_some());
+
+    if needs_weather {
+        let weather_missing_source = match &state.weather {
+            None => Some("Weather (no data)".to_string()),
+            Some(w) if is_stale(w.observation_time, now_secs, WEATHER_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(w.observation_time) / 3600;
+                Some(format!("Weather (stale >{}h)", age_h))
+            }
+            _ => None,
+        };
+
+        if let Some(src) = weather_missing_source {
+            if criteria.min_temp_f.is_some() {
+                unchecked.push(UncheckedCriterion { criterion: "Min temperature".to_string(), missing_source: src.clone() });
+            }
+            if criteria.max_temp_f.is_some() {
+                unchecked.push(UncheckedCriterion { criterion: "Max temperature".to_string(), missing_source: src.clone() });
+            }
+            if criteria.max_precip_chance_pct.is_some() {
+                unchecked.push(UncheckedCriterion { criterion: "Precipitation chance".to_string(), missing_source: src });
+            }
+        } else if let Some(w) = &state.weather {
+            if let Some(min) = criteria.min_temp_f {
+                let factor = EvalFactor {
+                    name: "Temperature".to_string(),
+                    actual: format!("{:.0}°F", w.temperature_f),
+                    threshold: format!("≥ {:.0}°F", min),
+                    detail: if w.temperature_f < min {
+                        format!("{:.0}°F — {:.0}° below minimum", w.temperature_f, min - w.temperature_f)
+                    } else {
+                        format!("{:.0}°F ✓", w.temperature_f)
+                    },
+                };
+                if w.temperature_f < min { blockers.push(factor); } else { passing.push(factor); }
+            }
+            if let Some(max) = criteria.max_temp_f {
+                let factor = EvalFactor {
+                    name: "Max temperature".to_string(),
+                    actual: format!("{:.0}°F", w.temperature_f),
+                    threshold: format!("≤ {:.0}°F", max),
+                    detail: if w.temperature_f > max {
+                        format!("{:.0}°F — {:.0}° above maximum", w.temperature_f, w.temperature_f - max)
+                    } else {
+                        format!("{:.0}°F ✓", w.temperature_f)
+                    },
+                };
+                if w.temperature_f > max { blockers.push(factor); } else { passing.push(factor); }
+            }
+            if let Some(max_precip) = criteria.max_precip_chance_pct {
+                let factor = EvalFactor {
+                    name: "Precipitation chance".to_string(),
+                    actual: format!("{:.0}%", w.precip_chance_pct),
+                    threshold: format!("≤ {:.0}%", max_precip),
+                    detail: if w.precip_chance_pct > max_precip {
+                        format!("{:.0}% — {:.0}pp over limit", w.precip_chance_pct, w.precip_chance_pct - max_precip)
+                    } else {
+                        format!("{:.0}% ✓", w.precip_chance_pct)
+                    },
+                };
+                if w.precip_chance_pct > max_precip { blockers.push(factor); } else { passing.push(factor); }
+            }
+        }
+    }
+
+    // ── River ────────────────────────────────────────────────────────────────
+    let needs_river = signals.river
+        && (criteria.max_river_level_ft.is_some() || criteria.max_river_flow_cfs.is_some());
+
+    if needs_river {
+        let river_missing_source = match &state.river {
+            None => Some("River gauge (no data)".to_string()),
+            Some(r) if is_stale(r.timestamp, now_secs, RIVER_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(r.timestamp) / 3600;
+                Some(format!("River gauge (stale >{}h)", age_h))
+            }
+            _ => None,
+        };
+
+        if let Some(src) = river_missing_source {
+            if criteria.max_river_level_ft.is_some() {
+                unchecked.push(UncheckedCriterion { criterion: "River level".to_string(), missing_source: src.clone() });
+            }
+            if criteria.max_river_flow_cfs.is_some() {
+                unchecked.push(UncheckedCriterion { criterion: "River flow".to_string(), missing_source: src });
+            }
+        } else if let Some(r) = &state.river {
+            if let Some(max_level) = criteria.max_river_level_ft {
+                let factor = EvalFactor {
+                    name: "River level".to_string(),
+                    actual: format!("{:.1} ft", r.water_level_ft),
+                    threshold: format!("≤ {:.1} ft", max_level),
+                    detail: if r.water_level_ft > max_level {
+                        format!("{:.1} ft — {:.1} ft over limit", r.water_level_ft, r.water_level_ft - max_level)
+                    } else {
+                        format!("{:.1} ft ✓", r.water_level_ft)
+                    },
+                };
+                if r.water_level_ft > max_level { blockers.push(factor); } else { passing.push(factor); }
+            }
+            if let Some(max_flow) = criteria.max_river_flow_cfs {
+                let factor = EvalFactor {
+                    name: "River flow".to_string(),
+                    actual: format!("{:.0} cfs", r.streamflow_cfs),
+                    threshold: format!("≤ {:.0} cfs", max_flow),
+                    detail: if r.streamflow_cfs > max_flow {
+                        format!("{:.0} cfs — {:.0} cfs over limit", r.streamflow_cfs, r.streamflow_cfs - max_flow)
+                    } else {
+                        format!("{:.0} cfs ✓", r.streamflow_cfs)
+                    },
+                };
+                if r.streamflow_cfs > max_flow { blockers.push(factor); } else { passing.push(factor); }
+            }
+        }
+    }
+
+    // ── Road ─────────────────────────────────────────────────────────────────
+    if signals.road && criteria.road_open_required {
+        let road_missing_source = match &state.road {
+            None => Some("Road status (no data)".to_string()),
+            Some(rd) if is_stale(rd.timestamp, now_secs, ROAD_STALE_SECS) => {
+                let age_h = now_secs.saturating_sub(rd.timestamp) / 3600;
+                Some(format!("Road status (stale >{}h)", age_h))
+            }
+            _ => None,
+        };
+
+        if let Some(src) = road_missing_source {
+            unchecked.push(UncheckedCriterion { criterion: "Road access".to_string(), missing_source: src });
+        } else if let Some(rd) = &state.road {
+            let is_open = rd.status == "open" || rd.status == "No active closures";
+            let factor = EvalFactor {
+                name: "Road access".to_string(),
+                actual: rd.status.to_uppercase(),
+                threshold: "OPEN".to_string(),
+                detail: if is_open {
+                    format!("{} ✓", rd.road_name)
+                } else {
+                    format!("{} is {} — {}", rd.road_name, rd.status, rd.affected_segment)
+                },
+            };
+            if is_open { passing.push(factor); } else { blockers.push(factor); }
+        }
+    }
+
+    // ── Source age ───────────────────────────────────────────────────────────
+    let age_secs = |ts: u64| -> Option<u64> {
+        if ts == 0 { None } else { Some(now_secs.saturating_sub(ts)) }
+    };
+    let source_age_secs = SourceAge {
+        weather_secs: state.weather.as_ref().and_then(|w| age_secs(w.observation_time)),
+        river_secs: state.river.as_ref().and_then(|r| age_secs(r.timestamp)),
+        ferry_secs: state.ferry.as_ref().and_then(|f| {
+            f.estimated_departures.first().and_then(|&t| age_secs(t))
+        }),
+        trail_secs: state.trail.as_ref().and_then(|t| age_secs(t.last_updated)),
+        road_secs: state.road.as_ref().and_then(|rd| age_secs(rd.timestamp)),
+    };
+
+    let decision = evaluate(destination, state, now_secs);
+    EvaluationDetail { decision, blockers, passing, unchecked, source_age_secs }
 }
 
 /// Return the current time as Unix seconds. Use in production call sites.
@@ -824,6 +1007,78 @@ mod tests {
         };
         // road signal is off — road criteria are skipped → Go
         assert!(matches!(evaluate(&dest, &state, NOW), TripDecision::Go));
+    }
+
+    // ── evaluate_detail ───────────────────────────────────────────────────────
+
+    #[test]
+    fn detail_blocker_when_river_too_high() {
+        let dest = make_dest_with(TripCriteria {
+            max_river_level_ft: Some(12.0),
+            ..default_criteria()
+        });
+        let state = DomainState {
+            river: Some(river_gauge(14.5, 5000.0)),
+            ..Default::default()
+        };
+        let detail = evaluate_detail(&dest, &state, NOW);
+        assert_eq!(detail.blockers.len(), 1);
+        assert_eq!(detail.blockers[0].name, "River level");
+        assert!(detail.blockers[0].detail.contains("over limit"));
+        assert!(detail.passing.is_empty());
+        assert!(detail.unchecked.is_empty());
+        assert!(matches!(detail.decision, TripDecision::NoGo { .. }));
+    }
+
+    #[test]
+    fn detail_passing_when_all_criteria_met() {
+        let dest = make_dest(Some(40.0), Some(90.0));
+        let state = weather_state(65.0);
+        let detail = evaluate_detail(&dest, &state, NOW);
+        assert!(detail.blockers.is_empty());
+        assert_eq!(detail.passing.len(), 2); // min temp + max temp
+        assert!(detail.unchecked.is_empty());
+        assert!(matches!(detail.decision, TripDecision::Go));
+    }
+
+    #[test]
+    fn detail_unchecked_when_weather_absent() {
+        let dest = make_dest(Some(50.0), None);
+        let state = DomainState::default();
+        let detail = evaluate_detail(&dest, &state, NOW);
+        assert!(detail.blockers.is_empty());
+        assert!(detail.passing.is_empty());
+        assert_eq!(detail.unchecked.len(), 1);
+        assert_eq!(detail.unchecked[0].criterion, "Min temperature");
+        assert!(detail.unchecked[0].missing_source.contains("no data"));
+        assert!(matches!(detail.decision, TripDecision::Unknown { .. }));
+    }
+
+    #[test]
+    fn detail_unchecked_when_weather_stale() {
+        let dest = make_dest(Some(50.0), None);
+        let state = DomainState {
+            weather: Some(weather_obs(65.0)),
+            ..Default::default()
+        };
+        let now = WEATHER_STALE_SECS + 1;
+        let detail = evaluate_detail(&dest, &state, now);
+        assert!(detail.blockers.is_empty());
+        assert!(detail.passing.is_empty());
+        assert_eq!(detail.unchecked.len(), 1);
+        assert!(detail.unchecked[0].missing_source.contains("stale"));
+        assert!(matches!(detail.decision, TripDecision::Unknown { .. }));
+    }
+
+    #[test]
+    fn detail_source_age_populated() {
+        let dest = make_dest(Some(40.0), None);
+        // timestamp = 100, now = 200 → age = 100
+        let mut obs = weather_obs(65.0);
+        obs.observation_time = 100;
+        let state = DomainState { weather: Some(obs), ..Default::default() };
+        let detail = evaluate_detail(&dest, &state, 200);
+        assert_eq!(detail.source_age_secs.weather_secs, Some(100));
     }
 
     fn make_dest_with_signals(
