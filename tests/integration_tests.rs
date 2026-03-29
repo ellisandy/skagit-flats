@@ -414,7 +414,7 @@ async fn index_page_contains_all_sections() {
     let html = String::from_utf8_lossy(&body);
 
     // Must contain key sections
-    assert!(html.contains("Skagit Flats Dashboard"), "missing title");
+    assert!(html.contains("SKAGIT FLATS"), "missing title");
     assert!(html.contains("/preview"), "missing preview image");
     assert!(html.contains("Destinations"), "missing destinations section");
     assert!(html.contains("Sources"), "missing sources section");
