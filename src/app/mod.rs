@@ -30,6 +30,8 @@ pub struct SharedState {
     pub display_width: u32,
     /// Display height for re-rendering.
     pub display_height: u32,
+    /// Hardware initialization error, if any (None = hardware OK or no-hardware mode).
+    pub hardware_error: RwLock<Option<String>>,
 }
 
 /// Status of a single data source, exposed via GET /sources.
@@ -152,8 +154,10 @@ pub fn run(
             match crate::display::waveshare::WaveshareDisplay::new() {
                 Ok(d) => Box::new(d),
                 Err(e) => {
-                    log::error!("failed to initialize hardware display: {e}");
+                    let msg = format!("failed to initialize hardware display: {e}");
+                    log::error!("{msg}");
                     log::warn!("falling back to NullDisplay");
+                    *shared.hardware_error.write().expect("hardware_error lock poisoned") = Some(msg);
                     Box::new(NullDisplay)
                 }
             }
@@ -389,6 +393,7 @@ pub fn start_web_server(
         destinations_path: opts.destinations_path.clone(),
         display_width: config.display.width,
         display_height: config.display.height,
+        hardware_error: RwLock::new(None),
     });
 
     let state = Arc::clone(&shared);
