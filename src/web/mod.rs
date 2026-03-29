@@ -272,6 +272,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
         ),
     };
 
+    let fixture_data = state.fixture_data;
     let now = current_unix_secs();
     let mut dest_cards = String::new();
     for d in &dests.destinations {
@@ -368,6 +369,12 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
         ));
     }
 
+    let fixture_banner = if fixture_data {
+        r#"<div class="fixture-banner">&#9888; FIXTURE DATA MODE — not showing live conditions</div>"#
+    } else {
+        ""
+    };
+
     Html(format!(
         r##"<!DOCTYPE html>
 <html lang="en">
@@ -431,6 +438,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .hw-error-banner .hw-icon {{ font-size: 1.1rem; flex-shrink: 0; line-height: 1.4; }}
   .hw-error-banner .hw-msg {{ font-size: 0.875rem; line-height: 1.4; }}
   .hw-error-banner strong {{ display: block; font-size: 0.95rem; margin-bottom: 0.2rem; }}
+  .fixture-banner {{ background: #7b341e; color: #fefce8; padding: 0.45rem 1rem; font-size: 0.8rem; font-weight: 700; text-align: center; letter-spacing: 0.05em; }}
   @media (min-width: 480px) {{
     .form-grid {{ grid-template-columns: 1fr 1fr 1fr; }}
   }}
@@ -439,6 +447,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
 <body>
 <header class="page-header"><h1>SKAGIT FLATS</h1></header>
 {hw_error_banner}
+{fixture_banner}
 <main>
 
 <section>
@@ -646,6 +655,7 @@ function escJs(s) {{
 </script>
 </body>
 </html>"##,
+        fixture_banner = fixture_banner,
         dest_cards = dest_cards,
         source_rows = source_rows,
         hw_error_banner = hw_error_banner,
@@ -698,6 +708,7 @@ mod tests {
             display_width: 800,
             display_height: 480,
             hardware_error: RwLock::new(None),
+            fixture_data: false,
         })
     }
 
@@ -758,6 +769,46 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(html.contains("SKAGIT FLATS"));
         assert!(html.contains("/preview"));
+    }
+
+    fn test_state_fixture() -> Arc<SharedState> {
+        Arc::new(SharedState {
+            pixel_buffer: RwLock::new(PixelBuffer::new(800, 480)),
+            source_statuses: RwLock::new(vec![]),
+            destinations_config: RwLock::new(DestinationsConfig::default()),
+            domain_state: RwLock::new(DomainState::default()),
+            destinations_path: "/tmp/skagit-test-destinations.toml".into(),
+            display_width: 800,
+            display_height: 480,
+            hardware_error: RwLock::new(None),
+            fixture_data: true,
+        })
+    }
+
+    #[tokio::test]
+    async fn index_shows_fixture_banner_when_fixture_mode() {
+        let app = build_router(test_state_fixture());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("fixture-banner"), "fixture banner element should be present");
+        assert!(html.contains("FIXTURE DATA MODE"), "fixture mode text should be present");
+    }
+
+    #[tokio::test]
+    async fn index_no_fixture_banner_in_normal_mode() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(!html.contains("FIXTURE DATA MODE"), "fixture banner should not appear in normal mode");
     }
 
     #[tokio::test]

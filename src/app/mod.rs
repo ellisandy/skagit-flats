@@ -32,6 +32,8 @@ pub struct SharedState {
     pub display_height: u32,
     /// Hardware initialization error, if any (None = hardware OK or no-hardware mode).
     pub hardware_error: RwLock<Option<String>>,
+    /// Whether the app is running in fixture data mode.
+    pub fixture_data: bool,
 }
 
 /// Status of a single data source, exposed via GET /sources.
@@ -394,6 +396,7 @@ pub fn start_web_server(
         display_width: config.display.width,
         display_height: config.display.height,
         hardware_error: RwLock::new(None),
+        fixture_data: opts.fixture_data,
     });
 
     let state = Arc::clone(&shared);

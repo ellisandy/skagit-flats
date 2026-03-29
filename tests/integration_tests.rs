@@ -136,6 +136,7 @@ fn populated_state() -> Arc<SharedState> {
         display_width: 800,
         display_height: 480,
         hardware_error: RwLock::new(None),
+        fixture_data: false,
     })
 }
 
