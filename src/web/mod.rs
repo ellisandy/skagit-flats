@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{delete, get, post};
@@ -12,6 +12,9 @@ use crate::domain::{RelevantSignals, TripCriteria};
 use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
 use crate::render::render_display;
+
+/// Fixture RDB returned when SKAGIT_FIXTURE_DATA=1 for gauge search.
+const FIXTURE_SITES_RDB: &str = include_str!("../sources/fixtures/usgs_sites.rdb");
 
 /// Build the axum Router for the local web interface.
 pub fn build_router(state: Arc<SharedState>) -> Router {
@@ -32,7 +35,187 @@ pub fn build_router(state: Arc<SharedState>) -> Router {
             "/sources/:name/disable",
             post(handler_disable_source),
         )
+        .route("/setup/gauges", get(handler_gauge_search))
         .with_state(state)
+}
+
+/// Query parameters for GET /setup/gauges.
+#[derive(Debug, serde::Deserialize)]
+struct GaugeSearchQuery {
+    lat: f64,
+    lon: f64,
+    #[serde(default = "default_radius_km")]
+    radius_km: f64,
+}
+
+fn default_radius_km() -> f64 {
+    50.0
+}
+
+/// A single USGS gauge candidate returned by the gauge search endpoint.
+#[derive(Debug, serde::Serialize)]
+struct GaugeCandidate {
+    site_id: String,
+    site_name: String,
+    lat: f64,
+    lon: f64,
+    distance_km: f64,
+}
+
+/// GET /setup/gauges?lat=<lat>&lon=<lon>&radius_km=<km>
+///
+/// Searches the USGS NWIS site service for stream gauges within the given
+/// radius of the specified coordinates. Returns a JSON array of candidates
+/// sorted by distance. In fixture mode (SKAGIT_FIXTURE_DATA=1) returns
+/// canned results near Mount Vernon, WA.
+async fn handler_gauge_search(
+    Query(params): Query<GaugeSearchQuery>,
+) -> impl IntoResponse {
+    if !(-90.0..=90.0).contains(&params.lat) || !(-180.0..=180.0).contains(&params.lon) {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":"invalid coordinates"}"#.to_string(),
+        );
+    }
+    let radius_km = params.radius_km.clamp(1.0, 200.0);
+
+    let use_fixtures = std::env::var("SKAGIT_FIXTURE_DATA")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
+    let rdb_text = if use_fixtures {
+        FIXTURE_SITES_RDB.to_string()
+    } else {
+        match fetch_usgs_sites(params.lat, params.lon, radius_km) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("gauge search fetch failed: {e}");
+                let body = serde_json::json!({"error": e}).to_string();
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    body,
+                );
+            }
+        }
+    };
+
+    let mut candidates = parse_usgs_sites_rdb(&rdb_text, params.lat, params.lon);
+    candidates.retain(|c| c.distance_km <= radius_km);
+    candidates.sort_by(|a, b| a.distance_km.partial_cmp(&b.distance_km).unwrap_or(std::cmp::Ordering::Equal));
+
+    let body = serde_json::to_string(&candidates).unwrap_or_else(|_| "[]".to_string());
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+}
+
+/// Compute an approximate bounding box and call the USGS NWIS site service.
+fn fetch_usgs_sites(lat: f64, lon: f64, radius_km: f64) -> Result<String, String> {
+    // 1 degree latitude ≈ 111 km; longitude degrees shrink with cos(lat).
+    let lat_deg = radius_km / 111.0;
+    let lon_deg = radius_km / (111.0 * lat.to_radians().cos().abs().max(0.01));
+
+    let min_lat = (lat - lat_deg).max(-90.0);
+    let max_lat = (lat + lat_deg).min(90.0);
+    let min_lon = (lon - lon_deg).max(-180.0);
+    let max_lon = (lon + lon_deg).min(180.0);
+
+    let url = format!(
+        "https://waterservices.usgs.gov/nwis/site/?format=rdb&bBox={:.6},{:.6},{:.6},{:.6}&siteType=ST&hasDataTypeCd=iv",
+        min_lon, min_lat, max_lon, max_lat
+    );
+
+    ureq::get(&url)
+        .set("Accept", "text/plain")
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_string()
+        .map_err(|e| e.to_string())
+}
+
+/// Parse USGS NWIS site service RDB format into gauge candidates.
+///
+/// RDB format: comment lines start with `#`, first non-comment line is
+/// tab-separated column names, second non-comment line is column types
+/// (skip it), remaining lines are tab-separated data rows.
+fn parse_usgs_sites_rdb(rdb: &str, origin_lat: f64, origin_lon: f64) -> Vec<GaugeCandidate> {
+    let mut candidates = Vec::new();
+    let mut header_idx: Option<Vec<String>> = None;
+    let mut skip_type_row = false;
+
+    for line in rdb.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+
+        // First non-comment line is the header row.
+        if header_idx.is_none() {
+            header_idx = Some(
+                line.split('\t')
+                    .map(|s| s.to_string())
+                    .collect(),
+            );
+            skip_type_row = true;
+            continue;
+        }
+
+        // Second non-comment line is the column type row — skip it.
+        if skip_type_row {
+            skip_type_row = false;
+            continue;
+        }
+
+        let headers = header_idx.as_ref().unwrap();
+        let fields: Vec<&str> = line.split('\t').collect();
+
+        let get = |name: &str| -> Option<&str> {
+            headers.iter().position(|h| h == name).and_then(|i| fields.get(i).copied())
+        };
+
+        let site_id = match get("site_no") {
+            Some(v) if !v.is_empty() => v.to_string(),
+            _ => continue,
+        };
+        let site_name = match get("station_nm") {
+            Some(v) if !v.is_empty() => v.to_string(),
+            _ => continue,
+        };
+        let lat: f64 = match get("dec_lat_va").and_then(|v| v.parse().ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+        let lon: f64 = match get("dec_long_va").and_then(|v| v.parse().ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        let distance_km = haversine_km(origin_lat, origin_lon, lat, lon);
+        candidates.push(GaugeCandidate {
+            site_id,
+            site_name,
+            lat,
+            lon,
+            distance_km,
+        });
+    }
+
+    candidates
+}
+
+/// Approximate great-circle distance in km between two lat/lon points.
+fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const R: f64 = 6371.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+    2.0 * R * a.sqrt().asin()
 }
 
 async fn handler_health() -> &'static str {
@@ -439,6 +622,16 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .hw-error-banner .hw-msg {{ font-size: 0.875rem; line-height: 1.4; }}
   .hw-error-banner strong {{ display: block; font-size: 0.95rem; margin-bottom: 0.2rem; }}
   .fixture-banner {{ background: #7b341e; color: #fefce8; padding: 0.45rem 1rem; font-size: 0.8rem; font-weight: 700; text-align: center; letter-spacing: 0.05em; }}
+  .gauge-results {{ margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }}
+  .gauge-item {{ background: #f8f8f8; border-radius: 8px; padding: 0.65rem 0.9rem; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; border: 1.5px solid #e5e5e5; }}
+  .gauge-info {{ display: flex; flex-direction: column; gap: 0.1rem; flex: 1; min-width: 0; }}
+  .gauge-name {{ font-size: 0.88rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .gauge-meta {{ font-size: 0.75rem; color: #999; }}
+  .gauge-id {{ font-family: monospace; font-size: 0.85rem; font-weight: 700; color: #2471a3; white-space: nowrap; }}
+  .btn-copy {{ background: #eaf4fd; color: #2471a3; border-color: #b8d6ee; min-height: 36px; font-size: 0.8rem; white-space: nowrap; }}
+  #gauge-search-status {{ font-size: 0.82rem; color: #888; margin-top: 0.5rem; min-height: 1.2em; }}
+  .config-hint {{ background: #fffbe6; border: 1.5px solid #f0d060; border-radius: 8px; padding: 0.7rem 0.9rem; font-size: 0.82rem; color: #555; margin-top: 0.75rem; display: none; }}
+  .config-hint code {{ background: #f4f0d8; border-radius: 3px; padding: 0.1rem 0.35rem; font-size: 0.85rem; }}
   @media (min-width: 480px) {{
     .form-grid {{ grid-template-columns: 1fr 1fr 1fr; }}
   }}
@@ -511,6 +704,34 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   <div class="section-title">Sources</div>
   <div class="source-rows" id="source-rows">
 {source_rows}
+  </div>
+</section>
+
+<section>
+  <div class="section-title">Gauge Finder</div>
+  <div class="form-card">
+    <p style="font-size:.83rem;color:#666;margin-bottom:.75rem">Find nearby USGS stream gauges to use as your river data source. Enter coordinates, select a gauge, then copy the site ID into your <code style="background:#f4f4f4;border-radius:3px;padding:.1rem .3rem">config.toml</code> under <code style="background:#f4f4f4;border-radius:3px;padding:.1rem .3rem">[sources.river] usgs_site_id</code>.</p>
+    <div class="form-grid">
+      <div class="form-field">
+        <label for="gauge-lat">Latitude</label>
+        <input type="number" id="gauge-lat" step="any" placeholder="e.g. 48.42">
+      </div>
+      <div class="form-field">
+        <label for="gauge-lon">Longitude</label>
+        <input type="number" id="gauge-lon" step="any" placeholder="e.g. -122.34">
+      </div>
+      <div class="form-field">
+        <label for="gauge-radius">Radius (km)</label>
+        <input type="number" id="gauge-radius" step="any" value="50" min="1" max="200">
+      </div>
+    </div>
+    <button type="button" class="btn-submit" onclick="searchGauges()" id="gauge-search-btn">Find Gauges</button>
+    <div id="gauge-search-status"></div>
+    <div class="gauge-results" id="gauge-results"></div>
+    <div class="config-hint" id="gauge-config-hint">
+      Add this to your <strong>config.toml</strong> under <code>[sources.river]</code>:<br>
+      <code id="gauge-config-snippet"></code>
+    </div>
   </div>
 </section>
 
@@ -651,6 +872,66 @@ function escHtml(s) {{
 }}
 function escJs(s) {{
   return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}}
+
+function searchGauges() {{
+  var lat = document.getElementById('gauge-lat').value.trim();
+  var lon = document.getElementById('gauge-lon').value.trim();
+  var radius = document.getElementById('gauge-radius').value.trim() || '50';
+  if (!lat || !lon) {{ showToast('Enter latitude and longitude', true); return; }}
+  var btn = document.getElementById('gauge-search-btn');
+  var status = document.getElementById('gauge-search-status');
+  var results = document.getElementById('gauge-results');
+  var hint = document.getElementById('gauge-config-hint');
+  btn.disabled = true;
+  btn.textContent = 'Searching\u2026';
+  status.textContent = '';
+  results.innerHTML = '';
+  hint.style.display = 'none';
+  var url = '/setup/gauges?lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lon) + '&radius_km=' + encodeURIComponent(radius);
+  fetch(url)
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      btn.disabled = false;
+      btn.textContent = 'Find Gauges';
+      if (data.error) {{ status.textContent = 'Error: ' + data.error; return; }}
+      if (!data.length) {{ status.textContent = 'No stream gauges found within ' + radius + ' km.'; return; }}
+      status.textContent = data.length + ' gauge' + (data.length === 1 ? '' : 's') + ' found.';
+      var html = '';
+      data.forEach(function(g) {{
+        var dist = g.distance_km < 10 ? g.distance_km.toFixed(1) : Math.round(g.distance_km);
+        html += '<div class="gauge-item">'
+          + '<div class="gauge-info">'
+          + '<span class="gauge-name">' + escHtml(g.site_name) + '</span>'
+          + '<span class="gauge-meta">' + dist + ' km away \u00b7 ' + g.lat.toFixed(4) + ', ' + g.lon.toFixed(4) + '</span>'
+          + '</div>'
+          + '<span class="gauge-id">' + escHtml(g.site_id) + '</span>'
+          + '<button class="btn-copy" onclick="selectGauge(\'' + escJs(g.site_id) + '\', \'' + escJs(g.site_name) + '\')">Select</button>'
+          + '</div>';
+      }});
+      results.innerHTML = html;
+    }})
+    .catch(function(e) {{
+      btn.disabled = false;
+      btn.textContent = 'Find Gauges';
+      status.textContent = 'Network error: ' + e;
+    }});
+}}
+
+function selectGauge(siteId, siteName) {{
+  var snippet = 'usgs_site_id = "' + siteId + '"';
+  document.getElementById('gauge-config-snippet').textContent = snippet;
+  var hint = document.getElementById('gauge-config-hint');
+  hint.style.display = 'block';
+  if (navigator.clipboard) {{
+    navigator.clipboard.writeText(snippet).then(function() {{
+      showToast('Copied: ' + snippet);
+    }}).catch(function() {{
+      showToast('Selected: ' + siteId + ' (' + siteName + ')');
+    }});
+  }} else {{
+    showToast('Selected: ' + siteId + ' (' + siteName + ')');
+  }}
 }}
 </script>
 </body>
@@ -980,5 +1261,69 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(!html.contains("Hardware Error"));
         assert!(!html.contains(r#"<div class="hw-error-banner"#));
+    }
+
+    #[tokio::test]
+    async fn gauge_search_fixture_mode_returns_candidates() {
+        std::env::set_var("SKAGIT_FIXTURE_DATA", "1");
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/setup/gauges?lat=48.42&lon=-122.34&radius_km=100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 100_000).await.unwrap();
+        let candidates: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert!(!candidates.is_empty(), "should return at least one gauge");
+        let first = &candidates[0];
+        assert!(first.get("site_id").is_some());
+        assert!(first.get("site_name").is_some());
+        assert!(first.get("distance_km").is_some());
+        if candidates.len() > 1 {
+            let d0 = candidates[0]["distance_km"].as_f64().unwrap();
+            let d1 = candidates[1]["distance_km"].as_f64().unwrap();
+            assert!(d0 <= d1, "results should be sorted by distance");
+        }
+        std::env::remove_var("SKAGIT_FIXTURE_DATA");
+    }
+
+    #[tokio::test]
+    async fn gauge_search_invalid_coords_returns_400() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/setup/gauges?lat=999&lon=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn parse_usgs_sites_rdb_fixture() {
+        let candidates = parse_usgs_sites_rdb(FIXTURE_SITES_RDB, 48.42, -122.34);
+        assert!(!candidates.is_empty(), "fixture should yield candidates");
+        let skagit = candidates.iter().find(|c| c.site_id == "12200500");
+        assert!(skagit.is_some(), "should find Skagit River gauge");
+        let s = skagit.unwrap();
+        assert!(s.distance_km < 10.0, "Skagit River gauge should be <10 km away");
+    }
+
+    #[test]
+    fn haversine_km_known_distance() {
+        let d = haversine_km(47.6062, -122.3321, 45.5051, -122.6750);
+        assert!((d - 235.0).abs() < 10.0, "Seattle-Portland distance ~235 km, got {d:.1}");
     }
 }
