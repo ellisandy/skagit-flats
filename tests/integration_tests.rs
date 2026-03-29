@@ -135,6 +135,7 @@ fn populated_state() -> Arc<SharedState> {
         destinations_path: "/tmp/skagit-integration-test-destinations.toml".into(),
         display_width: 800,
         display_height: 480,
+        hardware_error: RwLock::new(None),
     })
 }
 

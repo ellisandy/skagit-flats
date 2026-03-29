@@ -18,6 +18,7 @@ pub fn build_router(state: Arc<SharedState>) -> Router {
     Router::new()
         .route("/", get(handler_index))
         .route("/health", get(handler_health))
+        .route("/health/hardware", get(handler_health_hardware))
         .route("/preview", get(handler_preview))
         .route("/sources", get(handler_sources))
         .route("/destinations", get(handler_list_destinations))
@@ -36,6 +37,23 @@ pub fn build_router(state: Arc<SharedState>) -> Router {
 
 async fn handler_health() -> &'static str {
     "OK"
+}
+
+/// GET /health/hardware — returns hardware status as JSON.
+///
+/// Response: `{"ok": true}` when hardware is working or no-hardware mode,
+///           `{"ok": false, "error": "..."}` when hardware initialization failed.
+async fn handler_health_hardware(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
+    let hw_error = state.hardware_error.read().expect("hardware_error lock poisoned");
+    let body = match &*hw_error {
+        None => serde_json::json!({"ok": true}),
+        Some(msg) => serde_json::json!({"ok": false, "error": msg}),
+    };
+    (
+        if hw_error.is_none() { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&body).unwrap_or_else(|_| r#"{"ok":false}"#.to_string()),
+    )
 }
 
 async fn handler_preview(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
@@ -240,6 +258,19 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
         .source_statuses
         .read()
         .expect("source_statuses lock poisoned");
+    let hw_error = state
+        .hardware_error
+        .read()
+        .expect("hardware_error lock poisoned")
+        .clone();
+
+    let hw_error_banner = match &hw_error {
+        None => String::new(),
+        Some(msg) => format!(
+            r#"<div class="hw-error-banner"><span class="hw-icon">&#9888;</span><div class="hw-msg"><strong>Hardware Error</strong>{}</div></div>"#,
+            html_escape(msg)
+        ),
+    };
 
     let now = current_unix_secs();
     let mut dest_cards = String::new();
@@ -396,6 +427,10 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   #toast {{ position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(6rem); background: #222; color: #fff; padding: 0.55rem 1.2rem; border-radius: 20px; font-size: 0.875rem; transition: transform .25s ease; pointer-events: none; white-space: nowrap; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.25); }}
   #toast.show {{ transform: translateX(-50%) translateY(0); }}
   #toast.error {{ background: #c0392b; }}
+  .hw-error-banner {{ background: #c0392b; color: #fff; padding: 0.75rem 1rem; display: flex; align-items: flex-start; gap: 0.6rem; }}
+  .hw-error-banner .hw-icon {{ font-size: 1.1rem; flex-shrink: 0; line-height: 1.4; }}
+  .hw-error-banner .hw-msg {{ font-size: 0.875rem; line-height: 1.4; }}
+  .hw-error-banner strong {{ display: block; font-size: 0.95rem; margin-bottom: 0.2rem; }}
   @media (min-width: 480px) {{
     .form-grid {{ grid-template-columns: 1fr 1fr 1fr; }}
   }}
@@ -403,6 +438,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
 </head>
 <body>
 <header class="page-header"><h1>SKAGIT FLATS</h1></header>
+{hw_error_banner}
 <main>
 
 <section>
@@ -612,6 +648,7 @@ function escJs(s) {{
 </html>"##,
         dest_cards = dest_cards,
         source_rows = source_rows,
+        hw_error_banner = hw_error_banner,
     ))
 }
 
@@ -660,6 +697,7 @@ mod tests {
             destinations_path: "/tmp/skagit-test-destinations.toml".into(),
             display_width: 800,
             display_height: 480,
+            hardware_error: RwLock::new(None),
         })
     }
 
@@ -819,5 +857,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn hardware_health_ok_when_no_error() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/hardware")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn hardware_health_error_when_hw_failed() {
+        let state = test_state();
+        *state.hardware_error.write().unwrap() =
+            Some("SPI error: /dev/spidev0.0 not found".to_string());
+        let app = build_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health/hardware")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["ok"], false);
+        assert!(parsed["error"].as_str().unwrap().contains("SPI"));
+    }
+
+    #[tokio::test]
+    async fn index_shows_hw_error_banner_when_hw_failed() {
+        let state = test_state();
+        *state.hardware_error.write().unwrap() =
+            Some("SPI error: /dev/spidev0.0 not found".to_string());
+        let app = build_router(state);
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("hw-error-banner"));
+        assert!(html.contains("Hardware Error"));
+        assert!(html.contains("SPI error"));
+    }
+
+    #[tokio::test]
+    async fn index_no_hw_error_banner_when_hw_ok() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(!html.contains("Hardware Error"));
+        assert!(!html.contains(r#"<div class="hw-error-banner"#));
     }
 }
