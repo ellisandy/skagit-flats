@@ -88,7 +88,7 @@ Single horizontal bar across the full width.
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- Left: App name or destination name. Font: Medium (18px). Left-aligned, x=16.
+- Left: App name or destination name. Font: Small (18px). Left-aligned, x=16.
 - Center: Primary river site name (optional, if space). Font: Micro (14px). Centered.
 - Right: "Updated HH:MM". Font: Micro (14px). Right-aligned, x=784.
 - Background: White. No border.
@@ -137,7 +137,7 @@ y offset within column:
   6 px   — gap
   22 px  — sky condition text (Small, 18px)
   6 px   — gap
-  20 px  — "DIR SPD mph  PoP XX%" (Medium, 14px)
+  20 px  — "DIR SPD mph  PoP XX%" (Micro, 14px)
   remaining — padding
 ```
 
@@ -191,7 +191,7 @@ Rendering:
 - Normalize all readings to the 22px height range (min to max of dataset).
 - Connect data points with 2px polyline.
 - Mark the current (rightmost) reading with a 4×4 filled square.
-- If a flood threshold is configured, draw a 1px horizontal dashed line (4 on / 4 off).
+- If a flood threshold is configured, draw a 2px horizontal dashed line (4 on / 2 off).
 - No axes, no labels, no ticks. The sparkline is supplementary visual context only.
 
 ### Column B: Ferry Status (x=400, w=400)
