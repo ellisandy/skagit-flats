@@ -593,7 +593,18 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .preview-wrap img {{ width: 100%; height: auto; image-rendering: pixelated; border-radius: 4px; border: 1px solid #e0e0e0; display: block; }}
   .form-card {{ background: #fff; border-radius: 10px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
   .form-field {{ margin-bottom: 0.75rem; }}
-  .form-field label {{ display: block; font-size: 0.8rem; font-weight: 600; color: #555; margin-bottom: 0.3rem; }}
+  .form-field label {{ display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; font-weight: 600; color: #555; margin-bottom: 0.3rem; }}
+  .tip {{ display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: #ccc; color: #fff; font-size: 0.6rem; font-weight: 700; cursor: default; position: relative; flex-shrink: 0; }}
+  .tip::after {{ content: attr(data-tip); position: absolute; bottom: calc(100% + 6px); left: 0; transform: none; background: #1a1a2e; color: #fff; padding: 0.5rem 0.65rem; border-radius: 6px; font-size: 0.72rem; font-weight: 400; white-space: pre-line; width: 230px; pointer-events: none; opacity: 0; transition: opacity .15s; z-index: 20; line-height: 1.45; box-shadow: 0 2px 8px rgba(0,0,0,.3); }}
+  .tip:hover::after, .tip:focus::after {{ opacity: 1; }}
+  .tip:focus {{ outline: 2px solid #3498db; }}
+  .thresholds-ref {{ margin-top: 0.25rem; margin-bottom: 0.75rem; }}
+  .thresholds-ref summary {{ font-size: 0.75rem; color: #888; cursor: pointer; padding: 0.35rem 0; user-select: none; }}
+  .thresholds-ref summary:hover {{ color: #555; }}
+  .thresholds-ref table {{ width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 0.4rem; }}
+  .thresholds-ref th {{ background: #f4f4f4; font-weight: 600; color: #555; padding: 0.3rem 0.4rem; text-align: left; border-bottom: 1.5px solid #ddd; }}
+  .thresholds-ref td {{ padding: 0.3rem 0.4rem; border-bottom: 1px solid #eee; color: #444; }}
+  .thresholds-ref tr:last-child td {{ border-bottom: none; }}
   .form-field input[type="text"],
   .form-field input[type="number"] {{ width: 100%; padding: 0.55rem 0.75rem; border: 1.5px solid #ddd; border-radius: 6px; font-size: 1rem; min-height: 44px; background: #fafafa; }}
   .form-field input:focus {{ outline: 2px solid #3498db; border-color: transparent; background: #fff; }}
@@ -671,29 +682,43 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
       </div>
       <div class="form-grid">
         <div class="form-field">
-          <label for="min-temp">Min Temp (&deg;F)</label>
+          <label for="min-temp">Min Temp (&deg;F)<span class="tip" tabindex="0" data-tip="Minimum acceptable temperature.&#10;NO-GO if temp drops below this.&#10;&#10;Suggested starting values:&#10;Camping: 40°F&#10;Backpacking: 35°F&#10;Cycling: 45°F&#10;Paddling: 50°F">?</span></label>
           <input type="number" id="min-temp" step="any" placeholder="optional">
         </div>
         <div class="form-field">
-          <label for="max-temp">Max Temp (&deg;F)</label>
+          <label for="max-temp">Max Temp (&deg;F)<span class="tip" tabindex="0" data-tip="Maximum acceptable temperature.&#10;NO-GO if temp rises above this.&#10;&#10;Suggested starting values:&#10;Camping: 90°F&#10;Backpacking: 85°F&#10;Cycling: 95°F&#10;Paddling: 90°F">?</span></label>
           <input type="number" id="max-temp" step="any" placeholder="optional">
         </div>
         <div class="form-field">
-          <label for="max-precip">Max Precip (%)</label>
+          <label for="max-precip">Max Precip (%)<span class="tip" tabindex="0" data-tip="Maximum precipitation probability (0–100%).&#10;NO-GO if rain chance exceeds this.&#10;&#10;Suggested starting values:&#10;Camping: 60%&#10;Backpacking: 40%&#10;Cycling: 30%&#10;Paddling: 50%">?</span></label>
           <input type="number" id="max-precip" step="any" placeholder="optional">
         </div>
         <div class="form-field">
-          <label for="max-river">Max River (ft)</label>
+          <label for="max-river">Max River (ft)<span class="tip" tabindex="0" data-tip="Maximum river gauge height in feet.&#10;NO-GO if water level exceeds this.&#10;Varies by gauge site.&#10;&#10;Suggested for Skagit Valley:&#10;Camping/paddling: 10–12 ft">?</span></label>
           <input type="number" id="max-river" step="any" placeholder="optional">
         </div>
         <div class="form-field">
-          <label for="max-flow">Max Flow (cfs)</label>
+          <label for="max-flow">Max Flow (cfs)<span class="tip" tabindex="0" data-tip="Maximum streamflow in cubic feet per second.&#10;NO-GO if flow exceeds this.&#10;Varies by gauge site — check USGS&#10;historical data for safe thresholds.">?</span></label>
           <input type="number" id="max-flow" step="any" placeholder="optional">
         </div>
       </div>
+      <details class="thresholds-ref">
+        <summary>Suggested starting thresholds by activity type</summary>
+        <table>
+          <thead>
+            <tr><th>Activity</th><th>Min Temp</th><th>Max Temp</th><th>Max Precip</th><th>Max River</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Car camping</td><td>40&deg;F</td><td>90&deg;F</td><td>60%</td><td>12 ft</td></tr>
+            <tr><td>Backpacking</td><td>35&deg;F</td><td>85&deg;F</td><td>40%</td><td>&mdash;</td></tr>
+            <tr><td>Road cycling</td><td>45&deg;F</td><td>95&deg;F</td><td>30%</td><td>&mdash;</td></tr>
+            <tr><td>Paddling</td><td>50&deg;F</td><td>90&deg;F</td><td>50%</td><td>10 ft</td></tr>
+          </tbody>
+        </table>
+      </details>
       <div class="form-field-check">
         <input type="checkbox" id="road-req">
-        <label for="road-req">Road open required</label>
+        <label for="road-req">Road open required<span class="tip" tabindex="0" data-tip="NO-GO if the destination&#39;s road is reported closed (e.g. seasonal gate or weather closure).">?</span></label>
       </div>
       <button type="submit" class="btn-submit">Save Destination</button>
     </form>
