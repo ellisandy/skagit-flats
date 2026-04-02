@@ -131,7 +131,7 @@ cargo build --release
 Cross-compile for Raspberry Pi with SPI hardware support:
 
 ```sh
-cargo build --release --target aarch64-unknown-linux-gnu --features hardware
+cargo zigbuild --release --target aarch64-unknown-linux-gnu --features hardware
 ```
 
 ---
@@ -144,6 +144,7 @@ cargo build --release --target aarch64-unknown-linux-gnu --features hardware
 - SPI enabled: `sudo raspi-config` > Interface Options > SPI > Enable
 - SSH key authentication configured (see below)
 - Cross-compilation toolchain: `rustup target add aarch64-unknown-linux-gnu`
+- zigbuild for cross-linking: `brew install zig && cargo install cargo-zigbuild`
 
 ### SSH key setup
 
