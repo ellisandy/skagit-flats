@@ -69,8 +69,10 @@ fi
 # ── aarch64 C cross-compiler ──────────────────────────────────────────────────
 if command -v aarch64-linux-gnu-gcc &>/dev/null; then
     ok "aarch64-linux-gnu-gcc ($(aarch64-linux-gnu-gcc --version 2>&1 | head -1))"
+elif [ "$OS" = "macos" ] && command -v aarch64-elf-gcc &>/dev/null; then
+    ok "aarch64-elf-gcc ($(aarch64-elf-gcc --version 2>&1 | head -1)) [Homebrew macOS alternative]"
 else
-    fail "aarch64-linux-gnu-gcc not found"
+    fail "aarch64 cross-compiler not found"
     case "$OS" in
         macos)
             info "Install via Homebrew:"
