@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # setup.sh — Check and optionally install cross-compilation prerequisites
 # for building skagit-flats targeting aarch64-unknown-linux-gnu (Raspberry Pi).
+# Uses cargo-zigbuild for cross-compilation (requires zig and cargo-zigbuild).
 #
 # Usage:
 #   ./scripts/setup.sh          # Check only, print instructions for missing deps
@@ -66,59 +67,41 @@ if command -v rustup &>/dev/null; then
     fi
 fi
 
-# ── aarch64 C cross-compiler ──────────────────────────────────────────────────
-if command -v aarch64-linux-gnu-gcc &>/dev/null; then
-    ok "aarch64-linux-gnu-gcc ($(aarch64-linux-gnu-gcc --version 2>&1 | head -1))"
-elif [ "$OS" = "macos" ] && command -v aarch64-elf-gcc &>/dev/null; then
-    ok "aarch64-elf-gcc ($(aarch64-elf-gcc --version 2>&1 | head -1)) [Homebrew macOS alternative]"
+# ── zig ───────────────────────────────────────────────────────────────────────
+if command -v zig &>/dev/null; then
+    ok "zig ($(zig version 2>&1 | head -1))"
 else
-    fail "aarch64 cross-compiler not found"
+    fail "zig not found"
     case "$OS" in
         macos)
             info "Install via Homebrew:"
-            info "  brew install aarch64-elf-gcc"
-            info ""
-            info "Then add to ~/.cargo/config.toml:"
-            info "  [target.aarch64-unknown-linux-gnu]"
-            info "  linker = \"aarch64-elf-gcc\""
+            info "  brew install zig"
             ;;
         debian)
-            info "Install via apt:"
-            info "  sudo apt-get install gcc-aarch64-linux-gnu"
+            info "Install via snap or download from https://ziglang.org/download/:"
+            info "  snap install zig --classic --beta"
             ;;
         fedora)
-            info "Install via dnf:"
-            info "  sudo dnf install gcc-aarch64-linux-gnu"
+            info "Install via snap or download from https://ziglang.org/download/:"
+            info "  snap install zig --classic --beta"
             ;;
         arch)
             info "Install via pacman:"
-            info "  sudo pacman -S aarch64-linux-gnu-gcc"
+            info "  sudo pacman -S zig"
             ;;
         *)
-            info "Install the aarch64-linux-gnu cross-compiler for your platform."
-            info "Search your package manager for: gcc-aarch64-linux-gnu"
+            info "Download zig from https://ziglang.org/download/ and add to PATH."
             ;;
     esac
 fi
 
-# ── Cargo cross-compilation config ───────────────────────────────────────────
-CARGO_CONFIG="${CARGO_HOME:-$HOME/.cargo}/config.toml"
-if [ -f "$CARGO_CONFIG" ] && grep -q "aarch64-unknown-linux-gnu" "$CARGO_CONFIG" 2>/dev/null; then
-    ok "Cargo linker config for ${TARGET}"
-elif [ -f ".cargo/config.toml" ] && grep -q "aarch64-unknown-linux-gnu" ".cargo/config.toml" 2>/dev/null; then
-    ok "Cargo linker config for ${TARGET} (.cargo/config.toml)"
+# ── cargo-zigbuild ────────────────────────────────────────────────────────────
+if cargo zigbuild --version &>/dev/null 2>&1; then
+    ok "cargo-zigbuild ($(cargo zigbuild --version 2>&1 | head -1))"
 else
-    warn "No Cargo linker config found for ${TARGET}"
-    info "Add to ~/.cargo/config.toml or .cargo/config.toml:"
-    info "  [target.aarch64-unknown-linux-gnu]"
-    case "$OS" in
-        macos)
-            info "  linker = \"aarch64-elf-gcc\""
-            ;;
-        *)
-            info "  linker = \"aarch64-linux-gnu-gcc\""
-            ;;
-    esac
+    fail "cargo-zigbuild not found"
+    info "Install via cargo:"
+    info "  cargo install cargo-zigbuild"
 fi
 
 # ── rsync ─────────────────────────────────────────────────────────────────────

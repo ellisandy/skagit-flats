@@ -9,7 +9,7 @@ TARGET   ?= aarch64-unknown-linux-gnu
 
 .PHONY: build build-pi check-deps deploy install-service setup-ssh clean
 
-# Verify cross-compilation prerequisites (rustup target, cross-compiler, rsync, ssh).
+# Verify cross-compilation prerequisites (rustup target, zig, cargo-zigbuild, rsync, ssh).
 check-deps:
 	@bash scripts/setup.sh
 
@@ -19,7 +19,7 @@ build:
 
 # Cross-compile for Raspberry Pi with SPI hardware support.
 build-pi:
-	cargo build --release --target $(TARGET) --features hardware
+	cargo zigbuild --release --target $(TARGET) --features hardware
 
 # Deploy binary and config to the Pi, then restart the service.
 deploy: build-pi
