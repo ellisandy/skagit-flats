@@ -104,10 +104,15 @@ mod driver {
             Ok(())
         }
 
-        fn wait_busy(&self) -> Result<(), DisplayError> {
+        fn wait_busy(&mut self) -> Result<(), DisplayError> {
             let start = std::time::Instant::now();
-            // BUSY pin is HIGH when the panel is busy, LOW when idle (Waveshare 7.5" v2).
-            while self.busy.is_high() {
+            // Send GET_STATUS (0x71) then poll BUSY pin.
+            // BUSY is active-LOW: LOW (0) = panel processing, HIGH (1) = panel ready.
+            loop {
+                self.send_command(0x71)?;
+                if self.busy.is_high() {
+                    break;
+                }
                 if start.elapsed() > BUSY_TIMEOUT {
                     return Err(DisplayError::Spi(format!(
                         "panel busy timeout ({:?})",
@@ -121,12 +126,13 @@ mod driver {
         }
 
         fn init_panel(&mut self) -> Result<(), DisplayError> {
-            // Wait for reset/previous operation to complete before sending commands.
-            self.wait_busy()?;
+            // Booster soft start — required before power setting (matches official Waveshare driver).
+            self.send_command(0x06)?;
+            self.send_data(&[0x17, 0x17, 0x28, 0x17])?;
 
-            // Power setting.
+            // Power setting: VGH=20V, VGL=-20V, VDH=15V, VDL=-15V.
             self.send_command(0x01)?;
-            self.send_data(&[0x07, 0x07, 0x3F, 0x3F])?;
+            self.send_data(&[0x07, 0x07, 0x28, 0x17])?;
 
             // Power on.
             self.send_command(0x04)?;
@@ -162,7 +168,12 @@ mod driver {
         }
 
         fn display_frame(&mut self, buffer: &[u8]) -> Result<(), DisplayError> {
-            // Start data transmission (DTM2 for new data).
+            // DTM1 (0x10): old frame = bitwise inverse of new image (for waveform calculation).
+            self.send_command(0x10)?;
+            let inverted: Vec<u8> = buffer.iter().map(|b| !b).collect();
+            self.send_data(&inverted)?;
+
+            // DTM2 (0x13): new frame data.
             self.send_command(0x13)?;
             self.send_data(buffer)?;
 
