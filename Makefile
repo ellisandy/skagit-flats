@@ -23,7 +23,7 @@ build-pi:
 
 # Deploy binary and config to the Pi, then restart the service.
 deploy: build-pi
-	rsync -avz target/$(TARGET)/release/skagit-flats $(PI_HOST):$(PI_BIN)
+	rsync -avz --rsync-path='sudo rsync' target/$(TARGET)/release/skagit-flats $(PI_HOST):$(PI_BIN)
 	rsync -avz config.sample.toml $(PI_HOST):/etc/skagit-flats/config.toml --ignore-existing
 	rsync -avz destinations.sample.toml $(PI_HOST):/etc/skagit-flats/destinations.toml --ignore-existing
 	ssh $(PI_HOST) sudo systemctl restart skagit-flats
