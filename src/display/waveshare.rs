@@ -16,10 +16,13 @@ mod driver {
     const WIDTH: u32 = 800;
     const HEIGHT: u32 = 480;
 
-    // BCM GPIO pin assignments (matching Waveshare HAT).
+    // BCM GPIO pin assignments (matching Waveshare HAT epdconfig.py).
     const RST_PIN: u8 = 17;
     const DC_PIN: u8 = 25;
     const BUSY_PIN: u8 = 24;
+    /// PWR_PIN (GPIO 18) enables the 5V supply to the display module.
+    /// Must be driven HIGH before any SPI communication; LOW on shutdown.
+    const PWR_PIN: u8 = 18;
     // CS (GPIO 8 / CE0) is controlled by the SPI hardware via SlaveSelect::Ss0.
     // Do NOT claim it as a GPIO OutputPin — dual ownership corrupts CS signalling.
 
@@ -33,6 +36,7 @@ mod driver {
         spi: Spi,
         rst: OutputPin,
         dc: OutputPin,
+        pwr: OutputPin,
         busy: rppal::gpio::InputPin,
     }
 
@@ -48,6 +52,10 @@ mod driver {
                 .get(DC_PIN)
                 .map_err(|e| DisplayError::Spi(format!("DC pin {DC_PIN}: {e}")))?
                 .into_output();
+            let mut pwr = gpio
+                .get(PWR_PIN)
+                .map_err(|e| DisplayError::Spi(format!("PWR pin {PWR_PIN}: {e}")))?
+                .into_output();
             let busy = gpio
                 .get(BUSY_PIN)
                 .map_err(|e| DisplayError::Spi(format!("BUSY pin {BUSY_PIN}: {e}")))?
@@ -56,10 +64,15 @@ mod driver {
             let spi = Spi::new(Bus::Spi0, SlaveSelect::Ss0, SPI_CLOCK_HZ, Mode::Mode0)
                 .map_err(|e| DisplayError::Spi(format!("SPI init: {e}")))?;
 
+            // Enable 5V supply to display module before any SPI communication.
+            pwr.set_high();
+            thread::sleep(Duration::from_millis(20));
+
             let mut display = WaveshareDisplay {
                 spi,
                 rst,
                 dc,
+                pwr,
                 busy,
             };
 
@@ -106,13 +119,10 @@ mod driver {
 
         fn wait_busy(&mut self) -> Result<(), DisplayError> {
             let start = std::time::Instant::now();
-            // Send GET_STATUS (0x71) then poll BUSY pin.
-            // BUSY is active-LOW: LOW (0) = panel processing, HIGH (1) = panel ready.
-            loop {
-                self.send_command(0x71)?;
-                if self.busy.is_high() {
-                    break;
-                }
+            // BUSY is active-LOW: LOW = panel busy, HIGH = panel ready.
+            // Poll the pin directly; do not send 0x71 (GET_STATUS) — doing so
+            // in a tight loop resets the BUSY assertion on this panel revision.
+            while self.busy.is_low() {
                 if start.elapsed() > BUSY_TIMEOUT {
                     return Err(DisplayError::Spi(format!(
                         "panel busy timeout ({:?})",
@@ -134,10 +144,10 @@ mod driver {
             self.send_command(0x01)?;
             self.send_data(&[0x07, 0x07, 0x28, 0x17])?;
 
-            // Power on. Sleep 100ms then proceed — this panel revision does not
-            // reliably assert BUSY after 0x04, so we skip wait_busy here.
+            // Power on. Wait for panel to finish powering up before sending config.
             self.send_command(0x04)?;
             thread::sleep(Duration::from_millis(100));
+            self.wait_busy()?;
 
             // Panel setting: LUT from OTP, black/white mode, scan-up, shift-right.
             self.send_command(0x00)?;
@@ -205,20 +215,8 @@ mod driver {
                 )));
             }
 
-            match mode {
-                RefreshMode::Full => {
-                    log::debug!("WaveshareDisplay: full refresh");
-                    // Re-initialize to clear ghosting artifacts.
-                    self.init_panel()?;
-                    self.display_frame(&buffer.pixels)?;
-                }
-                RefreshMode::Partial => {
-                    log::debug!("WaveshareDisplay: partial refresh");
-                    // Partial refresh sends the same data but skips re-init.
-                    // The panel uses its built-in partial update LUT.
-                    self.display_frame(&buffer.pixels)?;
-                }
-            }
+            log::debug!("WaveshareDisplay: update ({mode:?})");
+            self.display_frame(&buffer.pixels)?;
 
             Ok(())
         }
@@ -239,6 +237,8 @@ mod driver {
                 log::warn!("failed to power off display on drop: {e}");
             }
             self.rst.set_low();
+            self.dc.set_low();
+            self.pwr.set_low();
         }
     }
 }
