@@ -134,10 +134,10 @@ mod driver {
             self.send_command(0x01)?;
             self.send_data(&[0x07, 0x07, 0x28, 0x17])?;
 
-            // Power on.
+            // Power on. Sleep 100ms then proceed — this panel revision does not
+            // reliably assert BUSY after 0x04, so we skip wait_busy here.
             self.send_command(0x04)?;
             thread::sleep(Duration::from_millis(100));
-            self.wait_busy()?;
 
             // Panel setting: LUT from OTP, black/white mode, scan-up, shift-right.
             self.send_command(0x00)?;
