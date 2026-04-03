@@ -590,7 +590,12 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .preview-wrap {{ background: #fff; border-radius: 10px; padding: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
   .preview-toolbar {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }}
   .preview-label {{ font-size: 0.78rem; color: #aaa; }}
-  .preview-wrap img {{ width: 100%; height: auto; image-rendering: pixelated; border-radius: 4px; border: 1px solid #e0e0e0; display: block; }}
+  .preview-toolbar-btns {{ display: flex; gap: 0.4rem; }}
+  .preview-wrap img {{ width: 100%; height: auto; image-rendering: pixelated; border-radius: 4px; border: 1px solid #e0e0e0; display: block; cursor: zoom-in; }}
+  .preview-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 200; align-items: center; justify-content: center; }}
+  .preview-overlay.open {{ display: flex; }}
+  .preview-overlay img {{ max-width: 96vw; max-height: 90vh; image-rendering: pixelated; border-radius: 4px; }}
+  .btn-close-overlay {{ position: fixed; top: 1rem; right: 1rem; background: rgba(255,255,255,.15); color: #fff; border: 1.5px solid rgba(255,255,255,.3); border-radius: 6px; font-size: 1.2rem; min-height: 44px; min-width: 44px; cursor: pointer; z-index: 201; line-height: 1; }}
   .form-card {{ background: #fff; border-radius: 10px; padding: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
   .form-field {{ margin-bottom: 0.75rem; }}
   .form-field label {{ display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; font-weight: 600; color: #555; margin-bottom: 0.3rem; }}
@@ -666,11 +671,19 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   <div class="preview-wrap">
     <div class="preview-toolbar">
       <span class="preview-label" id="preview-label">refreshes every 60s</span>
-      <button class="btn-refresh" onclick="refreshPreview()">Refresh</button>
+      <div class="preview-toolbar-btns">
+        <button class="btn-refresh" onclick="refreshPreview()">Refresh</button>
+        <button class="btn-refresh" onclick="openPreviewFullscreen()" aria-label="Expand preview">&#x26F6;</button>
+      </div>
     </div>
-    <img id="preview" src="/preview" alt="Display preview">
+    <img id="preview" src="/preview" alt="Display preview" onclick="openPreviewFullscreen()">
   </div>
 </section>
+
+<div class="preview-overlay" id="preview-overlay" onclick="closePreviewFullscreen()">
+  <button class="btn-close-overlay" onclick="closePreviewFullscreen()" aria-label="Close">&#x2715;</button>
+  <img id="preview-full" src="" alt="Display preview fullscreen">
+</div>
 
 <section>
   <div class="section-title">Add / Update Destination</div>
@@ -772,6 +785,22 @@ function refreshPreview() {{
   img.src = '/preview?' + Date.now();
   var t = new Date();
   label.textContent = 'refreshed ' + t.toLocaleTimeString([], {{hour:'2-digit',minute:'2-digit'}});
+}}
+
+function openPreviewFullscreen() {{
+  var src = document.getElementById('preview').src;
+  document.getElementById('preview-full').src = src;
+  document.getElementById('preview-overlay').classList.add('open');
+  document.addEventListener('keydown', _overlayKeyHandler);
+}}
+
+function closePreviewFullscreen() {{
+  document.getElementById('preview-overlay').classList.remove('open');
+  document.removeEventListener('keydown', _overlayKeyHandler);
+}}
+
+function _overlayKeyHandler(e) {{
+  if (e.key === 'Escape') closePreviewFullscreen();
 }}
 
 function showToast(msg, isError) {{
