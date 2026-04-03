@@ -227,6 +227,90 @@ async fn destinations_returns_decisions_for_all_destinations() {
     // North Cascades: should be NO GO (road is not "open")
     assert_eq!(parsed[1]["name"], "North Cascades");
     assert_eq!(parsed[1]["decision"]["decision"], "NoGo");
+    assert!(parsed[1]["decision"]["reasons"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn destinations_caution_state_has_warnings_field() {
+    // Build a state where river is within 10% of the max limit → CAUTION.
+    let now = current_unix_secs();
+    let state = {
+        let base = populated_state();
+        let mut domain = base.domain_state.write().unwrap();
+        // Set river to 13.5ft with max=15.0ft → within 10% (1.5ft margin) → CAUTION.
+        domain.river = Some(skagit_flats::domain::RiverGauge {
+            site_id: "12200500".to_string(),
+            site_name: "Skagit River".to_string(),
+            water_level_ft: 13.6,
+            streamflow_cfs: 8000.0,
+            timestamp: now,
+        });
+        drop(domain);
+        base
+    };
+    // Destination: only river criteria, max 15.0ft — 13.6ft is within 10%.
+    {
+        let mut cfg = state.destinations_config.write().unwrap();
+        cfg.destinations = vec![Destination {
+            name: "Caution Test".to_string(),
+            signals: Default::default(),
+            criteria: TripCriteria {
+                max_river_level_ft: Some(15.0),
+                ..Default::default()
+            },
+        }];
+    }
+    let app = build_router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/destinations")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed[0]["decision"]["decision"], "Caution");
+    assert!(parsed[0]["decision"]["warnings"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn destinations_unknown_state_has_missing_field() {
+    // Build a state with no weather data but a weather criterion configured.
+    let state = populated_state();
+    {
+        let mut domain = state.domain_state.write().unwrap();
+        domain.weather = None;
+    }
+    {
+        let mut cfg = state.destinations_config.write().unwrap();
+        cfg.destinations = vec![Destination {
+            name: "Unknown Test".to_string(),
+            signals: Default::default(),
+            criteria: TripCriteria {
+                min_temp_f: Some(40.0),
+                ..Default::default()
+            },
+        }];
+    }
+    let app = build_router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/destinations")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+    let parsed: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed[0]["decision"]["decision"], "Unknown");
+    assert!(parsed[0]["decision"]["missing"].as_array().is_some());
 }
 
 // --- Destination CRUD ---

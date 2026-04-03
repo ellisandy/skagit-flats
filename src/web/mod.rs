@@ -791,17 +791,18 @@ function refreshDestinations() {{
       var html = '';
       data.forEach(function(d) {{
         var state = 'unknown', badge = 'UNKNOWN', cls = 'unknown';
-        if (d.decision === 'Go' || (d.decision && d.decision.Go !== undefined)) {{
+        var dec = d.decision && d.decision.decision;
+        if (dec === 'Go') {{
           state = 'go'; badge = 'GO'; cls = 'go';
-        }} else if (d.decision && d.decision.Caution) {{
+        }} else if (dec === 'Caution') {{
           state = 'caution'; badge = 'CAUTION'; cls = 'caution';
-        }} else if (d.decision && d.decision.NoGo) {{
+        }} else if (dec === 'NoGo') {{
           state = 'nogo'; badge = 'NO GO'; cls = 'nogo';
         }}
         var msgs = [];
-        if (d.decision && d.decision.Caution && d.decision.Caution.warnings) msgs = d.decision.Caution.warnings;
-        else if (d.decision && d.decision.NoGo && d.decision.NoGo.reasons) msgs = d.decision.NoGo.reasons;
-        else if (d.decision && d.decision.Unknown && d.decision.Unknown.missing) msgs = d.decision.Unknown.missing;
+        if (d.decision && d.decision.warnings) msgs = d.decision.warnings;
+        else if (d.decision && d.decision.reasons) msgs = d.decision.reasons;
+        else if (d.decision && d.decision.missing) msgs = d.decision.missing;
         var reasonsHtml = msgs.length ? '<ul class="reasons">' + msgs.map(function(r) {{ return '<li>' + escHtml(r) + '</li>'; }}).join('') + '</ul>' : '';
         var criteria = [];
         var c = d.criteria || {{}};
