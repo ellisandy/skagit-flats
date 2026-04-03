@@ -51,7 +51,7 @@ mod driver {
             let busy = gpio
                 .get(BUSY_PIN)
                 .map_err(|e| DisplayError::Spi(format!("BUSY pin {BUSY_PIN}: {e}")))?
-                .into_input();
+                .into_input_pullup();
 
             let spi = Spi::new(Bus::Spi0, SlaveSelect::Ss0, SPI_CLOCK_HZ, Mode::Mode0)
                 .map_err(|e| DisplayError::Spi(format!("SPI init: {e}")))?;
