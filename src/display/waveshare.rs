@@ -121,6 +121,9 @@ mod driver {
         }
 
         fn init_panel(&mut self) -> Result<(), DisplayError> {
+            // Wait for reset/previous operation to complete before sending commands.
+            self.wait_busy()?;
+
             // Power setting.
             self.send_command(0x01)?;
             self.send_data(&[0x07, 0x07, 0x3F, 0x3F])?;
