@@ -599,7 +599,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .tip:hover::after, .tip:focus::after {{ opacity: 1; }}
   .tip:focus {{ outline: 2px solid #3498db; }}
   .thresholds-ref {{ margin-top: 0.25rem; margin-bottom: 0.75rem; }}
-  .thresholds-ref summary {{ font-size: 0.75rem; color: #888; cursor: pointer; padding: 0.35rem 0; user-select: none; }}
+  .thresholds-ref summary {{ font-size: 0.75rem; color: #888; cursor: pointer; padding: 0.35rem 0; min-height: 44px; display: flex; align-items: center; user-select: none; }}
   .thresholds-ref summary:hover {{ color: #555; }}
   .thresholds-ref table {{ width: 100%; border-collapse: collapse; font-size: 0.72rem; margin-top: 0.4rem; }}
   .thresholds-ref th {{ background: #f4f4f4; font-weight: 600; color: #555; padding: 0.3rem 0.4rem; text-align: left; border-bottom: 1.5px solid #ddd; }}
@@ -623,7 +623,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   button:active {{ opacity: 0.7; }}
   .btn-delete {{ background: #fff0f0; color: #c0392b; border-color: #f5c6cb; }}
   .btn-toggle {{ background: #eaf4fd; color: #2471a3; border-color: #b8d6ee; }}
-  .btn-refresh {{ background: #f4f4f4; color: #555; border-color: #ddd; min-height: 36px; font-size: 0.8rem; }}
+  .btn-refresh {{ background: #f4f4f4; color: #555; border-color: #ddd; font-size: 0.8rem; }}
   .btn-submit {{ background: #1e7e34; color: #fff; border-color: #155724; width: 100%; font-size: 1rem; }}
   #toast {{ position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%) translateY(6rem); background: #222; color: #fff; padding: 0.55rem 1.2rem; border-radius: 20px; font-size: 0.875rem; transition: transform .25s ease; pointer-events: none; white-space: nowrap; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,.25); }}
   #toast.show {{ transform: translateX(-50%) translateY(0); }}
@@ -639,7 +639,7 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   .gauge-name {{ font-size: 0.88rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
   .gauge-meta {{ font-size: 0.75rem; color: #999; }}
   .gauge-id {{ font-family: monospace; font-size: 0.85rem; font-weight: 700; color: #2471a3; white-space: nowrap; }}
-  .btn-copy {{ background: #eaf4fd; color: #2471a3; border-color: #b8d6ee; min-height: 36px; font-size: 0.8rem; white-space: nowrap; }}
+  .btn-copy {{ background: #eaf4fd; color: #2471a3; border-color: #b8d6ee; font-size: 0.8rem; white-space: nowrap; }}
   #gauge-search-status {{ font-size: 0.82rem; color: #888; margin-top: 0.5rem; min-height: 1.2em; }}
   .config-hint {{ background: #fffbe6; border: 1.5px solid #f0d060; border-radius: 8px; padding: 0.7rem 0.9rem; font-size: 0.82rem; color: #555; margin-top: 0.75rem; display: none; }}
   .config-hint code {{ background: #f4f0d8; border-radius: 3px; padding: 0.1rem 0.35rem; font-size: 0.85rem; }}
