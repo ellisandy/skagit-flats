@@ -651,6 +651,21 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   @media (min-width: 480px) {{
     .form-grid {{ grid-template-columns: 1fr 1fr 1fr; }}
   }}
+  .section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }}
+  .section-header .section-title {{ margin-bottom: 0; }}
+  .btn-add-dest {{ background: #1e7e34; color: #fff; border-color: #155724; min-height: 36px; font-size: 0.85rem; padding: 0 0.9rem; }}
+  .optional-label {{ font-size: 0.7rem; font-weight: 400; color: #aaa; margin-left: 0.3rem; }}
+  .modal-backdrop {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200; align-items: flex-end; }}
+  .modal-backdrop.open {{ display: flex; }}
+  .modal-sheet {{ background: #fff; border-radius: 16px 16px 0 0; padding: 1.25rem 1rem 2rem; width: 100%; max-height: 90vh; overflow-y: auto; transform: translateY(100%); transition: transform .3s ease; }}
+  .modal-backdrop.open .modal-sheet {{ transform: translateY(0); }}
+  .modal-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid #eee; }}
+  .modal-title {{ font-size: 1.05rem; font-weight: 700; }}
+  .btn-modal-close {{ background: #f0f0f0; color: #666; border-color: #ddd; min-height: 36px; min-width: 36px; padding: 0; border-radius: 50%; font-size: 1.2rem; line-height: 1; }}
+  @media (min-width: 480px) {{
+    .modal-backdrop {{ align-items: center; justify-content: center; }}
+    .modal-sheet {{ border-radius: 12px; max-width: 480px; width: 92%; margin: 0; }}
+  }}
 </style>
 </head>
 <body>
@@ -660,7 +675,10 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
 <main>
 
 <section>
-  <div class="section-title">Destinations</div>
+  <div class="section-header">
+    <div class="section-title">Destinations</div>
+    <button class="btn-add-dest" onclick="openDestModal()">+ Add</button>
+  </div>
   <div class="dest-cards" id="dest-cards">
 {dest_cards}
   </div>
@@ -684,59 +702,6 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
   <button class="btn-close-overlay" onclick="closePreviewFullscreen()" aria-label="Close">&#x2715;</button>
   <img id="preview-full" src="" alt="Display preview fullscreen">
 </div>
-
-<section>
-  <div class="section-title">Add / Update Destination</div>
-  <div class="form-card">
-    <form id="dest-form" onsubmit="return submitDestination(event)">
-      <div class="form-field">
-        <label for="dest-name">Name</label>
-        <input type="text" id="dest-name" name="name" required placeholder="e.g. Skagit Loop">
-      </div>
-      <div class="form-grid">
-        <div class="form-field">
-          <label for="min-temp">Min Temp (&deg;F)<span class="tip" tabindex="0" data-tip="Minimum acceptable temperature.&#10;NO-GO if temp drops below this.&#10;&#10;Suggested starting values:&#10;Camping: 40°F&#10;Backpacking: 35°F&#10;Cycling: 45°F&#10;Paddling: 50°F">?</span></label>
-          <input type="number" id="min-temp" step="any" placeholder="optional">
-        </div>
-        <div class="form-field">
-          <label for="max-temp">Max Temp (&deg;F)<span class="tip" tabindex="0" data-tip="Maximum acceptable temperature.&#10;NO-GO if temp rises above this.&#10;&#10;Suggested starting values:&#10;Camping: 90°F&#10;Backpacking: 85°F&#10;Cycling: 95°F&#10;Paddling: 90°F">?</span></label>
-          <input type="number" id="max-temp" step="any" placeholder="optional">
-        </div>
-        <div class="form-field">
-          <label for="max-precip">Max Precip (%)<span class="tip" tabindex="0" data-tip="Maximum precipitation probability (0–100%).&#10;NO-GO if rain chance exceeds this.&#10;&#10;Suggested starting values:&#10;Camping: 60%&#10;Backpacking: 40%&#10;Cycling: 30%&#10;Paddling: 50%">?</span></label>
-          <input type="number" id="max-precip" step="any" placeholder="optional">
-        </div>
-        <div class="form-field">
-          <label for="max-river">Max River (ft)<span class="tip" tabindex="0" data-tip="Maximum river gauge height in feet.&#10;NO-GO if water level exceeds this.&#10;Varies by gauge site.&#10;&#10;Suggested for Skagit Valley:&#10;Camping/paddling: 10–12 ft">?</span></label>
-          <input type="number" id="max-river" step="any" placeholder="optional">
-        </div>
-        <div class="form-field">
-          <label for="max-flow">Max Flow (cfs)<span class="tip" tabindex="0" data-tip="Maximum streamflow in cubic feet per second.&#10;NO-GO if flow exceeds this.&#10;Varies by gauge site — check USGS&#10;historical data for safe thresholds.">?</span></label>
-          <input type="number" id="max-flow" step="any" placeholder="optional">
-        </div>
-      </div>
-      <details class="thresholds-ref">
-        <summary>Suggested starting thresholds by activity type</summary>
-        <table>
-          <thead>
-            <tr><th>Activity</th><th>Min Temp</th><th>Max Temp</th><th>Max Precip</th><th>Max River</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>Car camping</td><td>40&deg;F</td><td>90&deg;F</td><td>60%</td><td>12 ft</td></tr>
-            <tr><td>Backpacking</td><td>35&deg;F</td><td>85&deg;F</td><td>40%</td><td>&mdash;</td></tr>
-            <tr><td>Road cycling</td><td>45&deg;F</td><td>95&deg;F</td><td>30%</td><td>&mdash;</td></tr>
-            <tr><td>Paddling</td><td>50&deg;F</td><td>90&deg;F</td><td>50%</td><td>10 ft</td></tr>
-          </tbody>
-        </table>
-      </details>
-      <div class="form-field-check">
-        <input type="checkbox" id="road-req">
-        <label for="road-req">Road open required<span class="tip" tabindex="0" data-tip="NO-GO if the destination&#39;s road is reported closed (e.g. seasonal gate or weather closure).">?</span></label>
-      </div>
-      <button type="submit" class="btn-submit">Save Destination</button>
-    </form>
-  </div>
-</section>
 
 <section>
   <div class="section-title">Sources</div>
@@ -774,6 +739,61 @@ async fn handler_index(State(state): State<Arc<SharedState>>) -> Html<String> {
 </section>
 
 </main>
+
+<div class="modal-backdrop" id="dest-modal" onclick="handleModalBackdropClick(event)" role="dialog" aria-modal="true" aria-label="Add Destination">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <span class="modal-title">Add Destination</span>
+      <button class="btn-modal-close" onclick="closeDestModal()" aria-label="Close">&times;</button>
+    </div>
+    <form id="dest-form" onsubmit="return submitDestination(event)">
+      <div class="form-field">
+        <label for="dest-name">Name</label>
+        <input type="text" id="dest-name" name="name" required placeholder="e.g. Skagit Loop" autocomplete="off">
+      </div>
+      <div class="form-field">
+        <label for="min-temp">Min Temp (&deg;F)<span class="optional-label">optional</span><span class="tip" tabindex="0" data-tip="Minimum acceptable temperature.&#10;NO-GO if temp drops below this.&#10;&#10;Suggested starting values:&#10;Camping: 40°F&#10;Backpacking: 35°F&#10;Cycling: 45°F&#10;Paddling: 50°F">?</span></label>
+        <input type="number" id="min-temp" step="any" placeholder="e.g. 40">
+      </div>
+      <div class="form-field">
+        <label for="max-temp">Max Temp (&deg;F)<span class="optional-label">optional</span><span class="tip" tabindex="0" data-tip="Maximum acceptable temperature.&#10;NO-GO if temp rises above this.&#10;&#10;Suggested starting values:&#10;Camping: 90°F&#10;Backpacking: 85°F&#10;Cycling: 95°F&#10;Paddling: 90°F">?</span></label>
+        <input type="number" id="max-temp" step="any" placeholder="e.g. 90">
+      </div>
+      <div class="form-field">
+        <label for="max-precip">Max Precip (%)<span class="optional-label">optional</span><span class="tip" tabindex="0" data-tip="Maximum precipitation probability (0–100%).&#10;NO-GO if rain chance exceeds this.&#10;&#10;Suggested starting values:&#10;Camping: 60%&#10;Backpacking: 40%&#10;Cycling: 30%&#10;Paddling: 50%">?</span></label>
+        <input type="number" id="max-precip" step="any" placeholder="e.g. 60">
+      </div>
+      <div class="form-field">
+        <label for="max-river">Max River (ft)<span class="optional-label">optional</span><span class="tip" tabindex="0" data-tip="Maximum river gauge height in feet.&#10;NO-GO if water level exceeds this.&#10;Varies by gauge site.&#10;&#10;Suggested for Skagit Valley:&#10;Camping/paddling: 10–12 ft">?</span></label>
+        <input type="number" id="max-river" step="any" placeholder="e.g. 12">
+      </div>
+      <div class="form-field">
+        <label for="max-flow">Max Flow (cfs)<span class="optional-label">optional</span><span class="tip" tabindex="0" data-tip="Maximum streamflow in cubic feet per second.&#10;NO-GO if flow exceeds this.&#10;Varies by gauge site — check USGS&#10;historical data for safe thresholds.">?</span></label>
+        <input type="number" id="max-flow" step="any" placeholder="e.g. 5000">
+      </div>
+      <details class="thresholds-ref">
+        <summary>Suggested thresholds by activity type</summary>
+        <table>
+          <thead>
+            <tr><th>Activity</th><th>Min Temp</th><th>Max Temp</th><th>Max Precip</th><th>Max River</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Car camping</td><td>40&deg;F</td><td>90&deg;F</td><td>60%</td><td>12 ft</td></tr>
+            <tr><td>Backpacking</td><td>35&deg;F</td><td>85&deg;F</td><td>40%</td><td>&mdash;</td></tr>
+            <tr><td>Road cycling</td><td>45&deg;F</td><td>95&deg;F</td><td>30%</td><td>&mdash;</td></tr>
+            <tr><td>Paddling</td><td>50&deg;F</td><td>90&deg;F</td><td>50%</td><td>10 ft</td></tr>
+          </tbody>
+        </table>
+      </details>
+      <div class="form-field-check">
+        <input type="checkbox" id="road-req">
+        <label for="road-req">Road open required<span class="tip" tabindex="0" data-tip="NO-GO if the destination&#39;s road is reported closed (e.g. seasonal gate or weather closure).">?</span></label>
+      </div>
+      <button type="submit" class="btn-submit">Save Destination</button>
+    </form>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -854,6 +874,30 @@ function refreshDestinations() {{
     }});
 }}
 
+function openDestModal() {{
+  var modal = document.getElementById('dest-modal');
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  setTimeout(function() {{
+    var nameField = document.getElementById('dest-name');
+    if (nameField) nameField.focus();
+  }}, 50);
+}}
+
+function closeDestModal() {{
+  var modal = document.getElementById('dest-modal');
+  modal.classList.remove('open');
+  document.body.style.overflow = '';
+}}
+
+function handleModalBackdropClick(e) {{
+  if (e.target === document.getElementById('dest-modal')) closeDestModal();
+}}
+
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') closeDestModal();
+}});
+
 function submitDestination(e) {{
   e.preventDefault();
   var name = document.getElementById('dest-name').value.trim();
@@ -877,6 +921,7 @@ function submitDestination(e) {{
     if (r.ok) {{
       showToast('\u201c' + name + '\u201d saved');
       e.target.reset();
+      closeDestModal();
       refreshDestinations();
       refreshPreview();
     }} else {{ r.text().then(function(t) {{ showToast('Error: ' + t, true); }}); }}
