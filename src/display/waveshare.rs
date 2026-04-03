@@ -111,8 +111,8 @@ mod driver {
 
         fn wait_busy(&self) -> Result<(), DisplayError> {
             let start = std::time::Instant::now();
-            // BUSY pin is LOW when the panel is busy.
-            while self.busy.is_low() {
+            // BUSY pin is HIGH when the panel is busy, LOW when idle.
+            while self.busy.is_high() {
                 if start.elapsed() > BUSY_TIMEOUT {
                     return Err(DisplayError::Spi(format!(
                         "panel busy timeout ({:?})",
@@ -125,8 +125,6 @@ mod driver {
         }
 
         fn init_panel(&mut self) -> Result<(), DisplayError> {
-            self.wait_busy()?;
-
             // Power setting.
             self.send_command(0x01)?;
             self.send_data(&[0x07, 0x07, 0x3F, 0x3F])?;
