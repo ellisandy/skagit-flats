@@ -19,8 +19,9 @@ mod driver {
     // BCM GPIO pin assignments (matching Waveshare HAT).
     const RST_PIN: u8 = 17;
     const DC_PIN: u8 = 25;
-    const CS_PIN: u8 = 8;
     const BUSY_PIN: u8 = 24;
+    // CS (GPIO 8 / CE0) is controlled by the SPI hardware via SlaveSelect::Ss0.
+    // Do NOT claim it as a GPIO OutputPin — dual ownership corrupts CS signalling.
 
     // SPI clock speed: 4 MHz is safe for the Waveshare panel.
     const SPI_CLOCK_HZ: u32 = 4_000_000;
@@ -32,7 +33,6 @@ mod driver {
         spi: Spi,
         rst: OutputPin,
         dc: OutputPin,
-        _cs: OutputPin,
         busy: rppal::gpio::InputPin,
     }
 
@@ -48,10 +48,6 @@ mod driver {
                 .get(DC_PIN)
                 .map_err(|e| DisplayError::Spi(format!("DC pin {DC_PIN}: {e}")))?
                 .into_output();
-            let cs = gpio
-                .get(CS_PIN)
-                .map_err(|e| DisplayError::Spi(format!("CS pin {CS_PIN}: {e}")))?
-                .into_output();
             let busy = gpio
                 .get(BUSY_PIN)
                 .map_err(|e| DisplayError::Spi(format!("BUSY pin {BUSY_PIN}: {e}")))?
@@ -64,7 +60,6 @@ mod driver {
                 spi,
                 rst,
                 dc,
-                _cs: cs,
                 busy,
             };
 
@@ -111,7 +106,7 @@ mod driver {
 
         fn wait_busy(&self) -> Result<(), DisplayError> {
             let start = std::time::Instant::now();
-            // BUSY pin is HIGH when the panel is busy, LOW when idle.
+            // BUSY pin is HIGH when the panel is busy, LOW when idle (Waveshare 7.5" v2).
             while self.busy.is_high() {
                 if start.elapsed() > BUSY_TIMEOUT {
                     return Err(DisplayError::Spi(format!(
@@ -121,6 +116,7 @@ mod driver {
                 }
                 thread::sleep(Duration::from_millis(10));
             }
+            log::debug!("wait_busy: panel ready ({:?})", start.elapsed());
             Ok(())
         }
 
