@@ -49,9 +49,9 @@ impl FontSize {
         GLYPH_HEIGHT * self.scale()
     }
 
-    /// Cell width including one column of right-side spacing.
+    /// Cell width including one column of right-side spacing, capped at 4px.
     pub fn cell_w(self) -> u32 {
-        self.glyph_w() + self.scale()
+        self.glyph_w() + self.scale().min(4)
     }
 
     /// Cell height including one row of bottom spacing.
@@ -322,10 +322,10 @@ mod tests {
 
     #[test]
     fn font_size_large_dims() {
-        // Large: 8× scale, glyph 40×56, cell 48×64
+        // Large: 8× scale, glyph 40×56, cell 44×64 (spacing capped at 4px)
         assert_eq!(FontSize::Large.glyph_w(), 40);
         assert_eq!(FontSize::Large.glyph_h(), 56);
-        assert_eq!(FontSize::Large.cell_w(), 48);
+        assert_eq!(FontSize::Large.cell_w(), 44);
         assert_eq!(FontSize::Large.cell_h(), 64);
     }
 

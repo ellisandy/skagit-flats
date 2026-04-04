@@ -1154,7 +1154,7 @@ mod tests {
     fn draw_text_scaled_hero_fits_go() {
         let mut buf = PixelBuffer::new(800, 480);
         let w = draw_text_scaled(&mut buf, 0, 0, "GO", FontSize::Hero, false, 490);
-        // "GO" = 2 chars × Hero cell_w (70+14=84) = 168px
+        // "GO" = 2 chars × Hero cell_w (70+4=74) = 148px (spacing capped at 4px)
         assert_eq!(w, 2 * FontSize::Hero.cell_w());
     }
 
