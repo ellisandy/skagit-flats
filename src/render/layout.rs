@@ -401,7 +401,7 @@ fn fill_circle(buf: &mut PixelBuffer, cx: i32, cy: i32, r: i32) {
 
 fn render_header(buf: &mut PixelBuffer, layout: &DisplayLayout) {
     let h = &layout.header;
-    let pad_x = 16u32;
+    let pad_x = 8u32;
     let pad_y = (HEADER_H.saturating_sub(FontSize::Micro.glyph_h())) / 2;
 
     // Left: app name
@@ -456,7 +456,7 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
     let scale = FontSize::Hero.scale();
     let glyph_h = FontSize::Hero.glyph_h();
     let cell_w = FontSize::Hero.cell_w();
-    let pad_x = 24u32;
+    let pad_x = 12u32;
 
     match &hero.decision {
         HeroDecision::Go { destination: _ } | HeroDecision::AllGo => {
@@ -739,7 +739,7 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
         vline(buf, CTX_DIVIDER_X, CONTEXT_Y, CONTEXT_H, DIVIDER_H);
     }
     if let Some(trail) = &ctx.trail {
-        let x = 12u32;
+        let x = 8u32;
         let mut y = CONTEXT_Y + 6;
         // Trail name
         draw_text_scaled(
@@ -749,23 +749,23 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
             &trail.name.to_uppercase(),
             FontSize::Micro,
             false,
-            CTX_LEFT_W - 24,
+            CTX_LEFT_W - 16,
         );
         y += FontSize::Micro.cell_h() + 4;
         // Condition text (word-wrapped, Small)
         let max_chars =
-            ((CTX_LEFT_W - 24) / FontSize::Small.cell_w()) as usize;
+            ((CTX_LEFT_W - 16) / FontSize::Small.cell_w()) as usize;
         let lines = wrap_text(&trail.condition, max_chars);
         for line in lines.iter().take(3) {
             if y + FontSize::Small.glyph_h() > CONTEXT_Y + CONTEXT_H {
                 break;
             }
-            draw_text_scaled(buf, x, y, line, FontSize::Small, false, CTX_LEFT_W - 24);
+            draw_text_scaled(buf, x, y, line, FontSize::Small, false, CTX_LEFT_W - 16);
             y += FontSize::Small.cell_h() + 2;
         }
     }
     if let Some(road) = &ctx.road {
-        let x = CTX_RIGHT_X + 12;
+        let x = CTX_RIGHT_X + 8;
         let mut y = CONTEXT_Y + 6;
         // Road name
         draw_text_scaled(
@@ -775,14 +775,14 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
             &road.name.to_uppercase(),
             FontSize::Micro,
             false,
-            CTX_RIGHT_W - 24,
+            CTX_RIGHT_W - 16,
         );
         y += FontSize::Micro.cell_h() + 4;
 
         let is_closed = road.status.to_lowercase().contains("closed");
         if is_closed {
             // Inverted "CLOSED" bar
-            let bar_w = CTX_RIGHT_W - 24;
+            let bar_w = CTX_RIGHT_W - 16;
             let bar_h = FontSize::Medium.cell_h() + 4;
             fill_rect_xy(buf, x, y, bar_w, bar_h, true);
             draw_text_centered(
@@ -797,19 +797,19 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
             y += bar_h + 4;
         } else {
             let status_str = road.status.to_uppercase();
-            draw_text_scaled(buf, x, y, &status_str, FontSize::Medium, false, CTX_RIGHT_W - 24);
+            draw_text_scaled(buf, x, y, &status_str, FontSize::Medium, false, CTX_RIGHT_W - 16);
             y += FontSize::Medium.cell_h() + 4;
         }
 
         // Affected segment
         let max_chars =
-            ((CTX_RIGHT_W - 24) / FontSize::Micro.cell_w()) as usize;
+            ((CTX_RIGHT_W - 16) / FontSize::Micro.cell_w()) as usize;
         let lines = wrap_text(&road.segment, max_chars);
         for line in lines.iter().take(2) {
             if y + FontSize::Micro.glyph_h() > CONTEXT_Y + CONTEXT_H {
                 break;
             }
-            draw_text_scaled(buf, x, y, line, FontSize::Micro, false, CTX_RIGHT_W - 24);
+            draw_text_scaled(buf, x, y, line, FontSize::Micro, false, CTX_RIGHT_W - 16);
             y += FontSize::Micro.cell_h() + 2;
         }
     }
@@ -1068,7 +1068,7 @@ pub fn layout_and_render_display(layout: &DisplayLayout, buf: &mut PixelBuffer) 
 /// Shown on first boot while data sources complete their initial fetch.
 /// Displays the app name in the header and a centered "Loading data..." message.
 pub fn layout_and_render_startup(buf: &mut PixelBuffer) {
-    let pad_x = 16u32;
+    let pad_x = 8u32;
     let pad_y = (HEADER_H.saturating_sub(FontSize::Small.glyph_h())) / 2;
 
     // Header: app name
