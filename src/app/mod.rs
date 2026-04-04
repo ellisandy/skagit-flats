@@ -1,16 +1,9 @@
 use crate::config::{Config, DestinationsConfig};
 use crate::display::{DisplayDriver, NullDisplay, RefreshMode};
-use crate::domain::{DataPoint, DomainState};
-use crate::evaluation::{current_unix_secs, evaluate};
-use crate::presentation::build_display_layout;
-use crate::render::{render_display, render_startup};
-use crate::sources::noaa::NoaaSource;
-use crate::sources::usgs::UsgsSource;
-use crate::sources::wsdot::WsdotFerrySource;
-use crate::sources::Source;
+use crate::domain::DomainState;
 use crate::web;
 use std::collections::HashMap;
-use std::sync::mpsc;
+use std::io::Read;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -132,24 +125,18 @@ impl AppOptions {
     }
 }
 
-/// Run the skagit-flats daemon until a shutdown signal is received.
+/// Run the device display loop: fetch a pre-rendered PNG from the configured
+/// URL and push it to the e-ink display, sleeping between refreshes.
 ///
-/// The `shared` parameter is the same Arc<SharedState> held by the web server,
-/// allowing the main loop to update the pixel buffer and domain state visible
-/// to web endpoints.
-pub fn run(
-    opts: AppOptions,
-    config: Config,
-    destinations: DestinationsConfig,
-    shared: Arc<SharedState>,
-) {
-    log::info!("skagit-flats starting");
-    log::info!(
-        "location: {} ({}, {})",
-        config.location.name,
-        config.location.latitude,
-        config.location.longitude
-    );
+/// This is a thin client loop (~30 lines). All rendering happens on the server.
+/// The API contract: GET `config.device.image_url` returns `image/png` directly.
+pub fn run(opts: AppOptions, config: Config) {
+    log::info!("skagit-flats device loop starting");
+
+    let device = config.device.unwrap_or_else(|| {
+        eprintln!("error: config.toml must have a [device] section with image_url");
+        std::process::exit(1);
+    });
 
     let mut display: Box<dyn DisplayDriver> = if opts.no_hardware {
         log::info!("no-hardware mode: using NullDisplay");
@@ -161,225 +148,56 @@ pub fn run(
             match crate::display::waveshare::WaveshareDisplay::new() {
                 Ok(d) => Box::new(d),
                 Err(e) => {
-                    let msg = format!("failed to initialize hardware display: {e}");
-                    log::error!("{msg}");
-                    log::warn!("falling back to NullDisplay");
-                    *shared.hardware_error.write().expect("hardware_error lock poisoned") = Some(msg);
+                    log::error!("failed to initialize hardware display: {e}, falling back to NullDisplay");
                     Box::new(NullDisplay)
                 }
             }
         }
         #[cfg(not(feature = "hardware"))]
         {
-            log::info!("hardware mode: built without 'hardware' feature, using NullDisplay");
+            log::info!("hardware feature not enabled, using NullDisplay");
             Box::new(NullDisplay)
         }
     };
 
-    if opts.fixture_data {
-        log::info!("fixture-data mode: sources will return static responses");
-    }
-
-    let (tx, rx) = mpsc::channel::<DataPoint>();
-
-    // Spawn NOAA weather source thread.
-    let noaa = NoaaSource::new(&config.location, config.sources.weather_interval_secs);
-    spawn_source(noaa, tx.clone());
-
-    // Spawn USGS river gauge source thread.
-    let usgs_site_id = config
-        .sources
-        .river
-        .as_ref()
-        .map(|r| r.usgs_site_id.as_str())
-        .unwrap_or("12200500");
-    let usgs = UsgsSource::new(usgs_site_id, config.sources.river_interval_secs);
-    spawn_source(usgs, tx.clone());
-
-    // Spawn WSDOT ferries source thread.
-    match WsdotFerrySource::new(config.sources.ferry.as_ref(), config.sources.ferry_interval_secs) {
-        Ok(ferry) => spawn_source(ferry, tx.clone()),
-        Err(e) => log::warn!("WSDOT ferries source disabled: {}", e),
-    }
-
-    // Drop the original sender so the channel closes when all source threads exit.
-    drop(tx);
-
-    // Spawn file watcher for destinations.toml.
-    spawn_destinations_watcher(opts.destinations_path.clone(), Arc::clone(&shared));
-
-    // Initial render: show startup placeholder while sources complete first fetch.
-    let startup_buf = render_startup();
-    if let Err(e) = display.update(&startup_buf, RefreshMode::Full) {
-        log::error!("display update failed: {e}");
-    }
-
-    // Update shared pixel buffer with startup render.
-    {
-        let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
-        *pb = startup_buf;
-    }
-
-    // Log destination decisions against current state.
-    for dest in &destinations.destinations {
-        let decision = evaluate(dest, &DomainState::default(), current_unix_secs());
-        log::info!("destination '{}': {:?}", dest.name, decision);
-    }
-
-    // Main loop — blocks until all source threads exit (channel closes).
-    // Hourly full refresh clears e-ink ghosting; data updates use partial refresh.
-    log::info!("entering main loop");
-    let full_refresh_interval = Duration::from_secs(3600);
-    let mut last_full_refresh = std::time::Instant::now();
+    let refresh = Duration::from_secs(device.refresh_interval_secs);
+    log::info!(
+        "fetching {} every {}s ({}x{})",
+        device.image_url, device.refresh_interval_secs,
+        config.display.width, config.display.height,
+    );
 
     loop {
-        // Check if an hourly full refresh is due.
-        let needs_full = last_full_refresh.elapsed() >= full_refresh_interval;
-        if needs_full {
-            log::info!("hourly full refresh to clear ghosting");
-            let buf = {
-                let domain = shared.domain_state.read().expect("domain_state lock poisoned");
-                let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-                let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
-                render_display(&layout)
-            };
-
-            if let Err(e) = display.update(&buf, RefreshMode::Full) {
-                log::error!("full refresh failed: {e}");
-            }
-            let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
-            *pb = buf;
-            last_full_refresh = std::time::Instant::now();
-        }
-
-        match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(point) => {
-                // Update shared domain state.
-                {
-                    let mut ds = shared.domain_state.write().expect("domain_state lock poisoned");
-                    ds.apply(point);
+        match fetch_image(&device.image_url, config.display.width, config.display.height) {
+            Ok(buf) => {
+                if let Err(e) = display.update(&buf, RefreshMode::Full) {
+                    log::error!("display update failed: {e}");
                 }
-
-                // Re-render with current destinations.
-                let buf = {
-                    let domain = shared.domain_state.read().expect("domain_state lock poisoned");
-                    let dests = shared.destinations_config.read().expect("destinations_config lock poisoned");
-                    let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
-                    render_display(&layout)
-                };
-
-                // Use partial refresh for data updates (fast, ~0.3s).
-                if let Err(e) = display.update(&buf, RefreshMode::Partial) {
-                    log::error!("partial refresh failed: {e}");
-                }
-
-                // Update shared pixel buffer.
-                let mut pb = shared.pixel_buffer.write().expect("pixel_buffer lock poisoned");
-                *pb = buf;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                log::debug!("heartbeat tick");
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                log::info!("channel disconnected, shutting down");
-                break;
-            }
+            Err(e) => log::error!("image fetch failed: {e}"),
         }
+        thread::sleep(refresh);
     }
 }
 
-/// Watch destinations.toml for changes and reload when modified.
+/// Fetch a PNG from `url`, decode it, and pack into a 1-bit PixelBuffer.
 ///
-/// Uses a simple polling approach (checks mtime every 2 seconds) to avoid
-/// adding a file-watcher dependency like `notify`. Sufficient for a local
-/// config file that changes infrequently.
-fn spawn_destinations_watcher(path: std::path::PathBuf, shared: Arc<SharedState>) {
-    thread::Builder::new()
-        .name("destinations-watcher".to_string())
-        .spawn(move || {
-            let mut last_modified = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
-
-            loop {
-                thread::sleep(Duration::from_secs(2));
-
-                let current_modified = std::fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .ok();
-
-                if current_modified != last_modified {
-                    last_modified = current_modified;
-                    log::info!("destinations.toml changed, reloading");
-
-                    match crate::config::load_destinations(&path) {
-                        Ok(new_config) => {
-                            let mut dests = shared
-                                .destinations_config
-                                .write()
-                                .expect("destinations_config lock poisoned");
-                            *dests = new_config;
-                            drop(dests);
-
-                            // Re-render with updated destinations.
-                            let buf = {
-                                let domain = shared
-                                    .domain_state
-                                    .read()
-                                    .expect("domain_state lock poisoned");
-                                let dests = shared
-                                    .destinations_config
-                                    .read()
-                                    .expect("destinations_config lock poisoned");
-                                let layout = build_display_layout(&domain, &dests.destinations, current_unix_secs());
-                                render_display(&layout)
-                            };
-
-                            let mut pb = shared
-                                .pixel_buffer
-                                .write()
-                                .expect("pixel_buffer lock poisoned");
-                            *pb = buf;
-
-                            log::info!("destinations reloaded and display re-rendered");
-                        }
-                        Err(e) => {
-                            log::warn!("failed to reload destinations.toml: {e}");
-                        }
-                    }
-                }
-            }
-        })
-        .expect("failed to spawn destinations watcher thread");
-}
-
-/// Spawn a source on a dedicated thread. The source fetches data in a loop at
-/// its configured refresh interval, sending results over the channel.
-fn spawn_source(source: impl Source + 'static, tx: mpsc::Sender<DataPoint>) {
-    let name = source.name().to_string();
-    let interval = source.refresh_interval();
-
-    thread::Builder::new()
-        .name(format!("source-{}", name))
-        .spawn(move || {
-            log::info!("source '{}' started (interval: {:?})", name, interval);
-            loop {
-                match source.fetch() {
-                    Ok(point) => {
-                        log::debug!("source '{}' fetched successfully", name);
-                        if tx.send(point).is_err() {
-                            log::info!("source '{}' channel closed, exiting", name);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("source '{}' fetch failed: {}", name, e);
-                    }
-                }
-                thread::sleep(interval);
-            }
-        })
-        .expect("failed to spawn source thread");
+/// Pixels with luma < 128 are black; >= 128 are white. Image pixels outside
+/// the buffer dimensions are silently ignored (PixelBuffer bounds-checks).
+fn fetch_image(
+    url: &str,
+    width: u32,
+    height: u32,
+) -> Result<crate::render::PixelBuffer, Box<dyn std::error::Error>> {
+    let resp = ureq::get(url).call()?;
+    let mut bytes = Vec::new();
+    resp.into_reader().take(5 * 1024 * 1024).read_to_end(&mut bytes)?;
+    let img = image::load_from_memory(&bytes)?.into_luma8();
+    let mut buf = crate::render::PixelBuffer::new(width, height);
+    for (x, y, pixel) in img.enumerate_pixels() {
+        buf.set_pixel(x, y, pixel.0[0] < 128);
+    }
+    Ok(buf)
 }
 
 /// Start the axum web server on a dedicated thread with its own tokio runtime.

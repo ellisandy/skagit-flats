@@ -1,5 +1,5 @@
-use skagit_flats::app::{AppOptions, run, start_web_server};
-use skagit_flats::config::{load_config, load_destinations};
+use skagit_flats::app::{AppOptions, run};
+use skagit_flats::config::load_config;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -11,12 +11,5 @@ fn main() {
         std::process::exit(1);
     });
 
-    let destinations = load_destinations(&opts.destinations_path).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
-
-    let (_web_handle, shared) = start_web_server(&config, &opts, &destinations);
-
-    run(opts, config, destinations, shared);
+    run(opts, config);
 }

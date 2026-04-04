@@ -2,6 +2,12 @@
 # Copy to config.toml and edit for your setup.
 # This file is never written at runtime — changes require a restart.
 
+# Device display loop: fetch a pre-rendered PNG from the server and display it.
+# The server exposes GET /image.png which returns image/png directly.
+[device]
+image_url = "http://skagit.local:8080/image.png"
+refresh_interval_secs = 60
+
 [display]
 width = 800
 height = 480

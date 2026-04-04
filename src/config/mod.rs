@@ -23,6 +23,24 @@ pub struct AuthConfig {
     pub password: String,
 }
 
+/// Device display loop configuration for the thin HTTP fetch mode.
+///
+/// When present, `run()` operates as a thin client: fetch a pre-rendered PNG
+/// from `image_url`, decode it, push to the hardware display, sleep, repeat.
+/// The API contract: GET `image_url` returns `image/png` directly.
+#[derive(Debug, Deserialize, Clone)]
+pub struct DeviceConfig {
+    /// URL of the pre-rendered display image served by the skagit-flats server.
+    pub image_url: String,
+    /// How often to fetch and refresh the display, in seconds.
+    #[serde(default = "default_device_refresh_secs")]
+    pub refresh_interval_secs: u64,
+}
+
+fn default_device_refresh_secs() -> u64 {
+    60
+}
+
 /// Top-level runtime configuration loaded from config.toml.
 /// This file is never written at runtime; changes require a restart.
 #[derive(Debug, Deserialize, Clone)]
@@ -33,6 +51,9 @@ pub struct Config {
     /// Optional web UI authentication. If absent, no login is required.
     #[serde(default)]
     pub auth: Option<AuthConfig>,
+    /// Device display loop config. When set, the app runs as a thin HTTP client.
+    #[serde(default)]
+    pub device: Option<DeviceConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
