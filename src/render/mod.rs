@@ -1,5 +1,8 @@
 pub mod font;
 mod layout;
+// TrueType spike — test-only, uses fontdue dev-dependency (sf-rb0)
+#[cfg(test)]
+mod font_ttf_spike;
 
 use crate::presentation::{DisplayLayout, Panel};
 
