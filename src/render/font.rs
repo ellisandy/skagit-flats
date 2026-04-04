@@ -58,6 +58,14 @@ impl FontSize {
     pub fn cell_h(self) -> u32 {
         self.glyph_h() + self.scale()
     }
+
+    /// Vertical gap between lines of body text.
+    ///
+    /// Capped at 4px so that multi-line sections (bullet lists, context body)
+    /// don't waste excessive whitespace at large scale factors.
+    pub fn line_gap(self) -> u32 {
+        self.scale().min(4)
+    }
 }
 
 /// Number of glyphs in the font (ASCII 32–126 inclusive).

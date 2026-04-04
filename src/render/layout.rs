@@ -453,7 +453,6 @@ fn render_hero(buf: &mut PixelBuffer, layout: &DisplayLayout) {
 }
 
 fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroContent) {
-    let scale = FontSize::Hero.scale();
     let glyph_h = FontSize::Hero.glyph_h();
     let cell_w = FontSize::Hero.cell_w();
     let pad_x = 12u32;
@@ -471,27 +470,31 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
             draw_text_scaled(buf, cx, cy, label, FontSize::Hero, false, HERO_LEFT_W);
         }
         HeroDecision::NoGo { destination: _, reasons } => {
-            // "NO GO" top-aligned
+            // "NO GO" top-aligned (no extra top padding — space reserved for bullets)
             let label = "NO GO";
             draw_text_scaled(
                 buf,
                 pad_x,
-                HERO_Y + 20,
+                HERO_Y,
                 label,
                 FontSize::Hero,
                 false,
                 HERO_LEFT_W - pad_x,
             );
 
-            // Reason bullets below hero text
-            let reasons_y =
-                HERO_Y + 20 + glyph_h + scale * 2;
-            let small_cell_h = FontSize::Small.cell_h();
+            // Reason bullets below hero text.
+            // Use line_gap() instead of scale for the gap so bullets aren't
+            // pushed out of the zone at large scale factors (Hero scale = 14).
+            // Cap at the zone midpoint so bullets always land within the zone.
+            let reasons_y = (HERO_Y + glyph_h + FontSize::Hero.line_gap())
+                .min(HERO_Y + HERO_H / 2);
+            let small_glyph_h = FontSize::Small.glyph_h();
+            let small_step = small_glyph_h + FontSize::Small.line_gap();
             let max_reasons = 4usize;
             let shown = reasons.len().min(max_reasons);
             for (i, reason) in reasons.iter().take(shown).enumerate() {
-                let ry = reasons_y + i as u32 * (small_cell_h + 2);
-                if ry + FontSize::Small.glyph_h() > HERO_Y + HERO_H {
+                let ry = reasons_y + i as u32 * small_step;
+                if ry + small_glyph_h > HERO_Y + HERO_H {
                     break;
                 }
                 // Filled 6×6 bullet square
@@ -507,8 +510,7 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
                 );
             }
             if reasons.len() > max_reasons {
-                let extra_y =
-                    reasons_y + max_reasons as u32 * (small_cell_h + 2);
+                let extra_y = reasons_y + max_reasons as u32 * small_step;
                 if extra_y + FontSize::Micro.glyph_h() <= HERO_Y + HERO_H {
                     let more = format!("...+{} more", reasons.len() - max_reasons);
                     draw_text_scaled(
@@ -528,18 +530,20 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
             draw_text_scaled(
                 buf,
                 pad_x,
-                HERO_Y + 20,
+                HERO_Y,
                 label,
                 FontSize::Hero,
                 false,
                 HERO_LEFT_W - pad_x,
             );
-            let reasons_y = HERO_Y + 20 + glyph_h + scale * 2;
-            let small_cell_h = FontSize::Small.cell_h();
+            let reasons_y = (HERO_Y + glyph_h + FontSize::Hero.line_gap())
+                .min(HERO_Y + HERO_H / 2);
+            let small_glyph_h = FontSize::Small.glyph_h();
+            let small_step = small_glyph_h + FontSize::Small.line_gap();
             let max_items = 4usize;
             for (i, warning) in warnings.iter().take(max_items).enumerate() {
-                let ry = reasons_y + i as u32 * (small_cell_h + 2);
-                if ry + FontSize::Small.glyph_h() > HERO_Y + HERO_H {
+                let ry = reasons_y + i as u32 * small_step;
+                if ry + small_glyph_h > HERO_Y + HERO_H {
                     break;
                 }
                 fill_rect_xy(buf, pad_x, ry + 6, 6, 6, true);
@@ -559,18 +563,20 @@ fn render_hero_left(buf: &mut PixelBuffer, hero: &crate::presentation::HeroConte
             draw_text_scaled(
                 buf,
                 pad_x,
-                HERO_Y + 20,
+                HERO_Y,
                 label,
                 FontSize::Hero,
                 false,
                 HERO_LEFT_W - pad_x,
             );
-            let reasons_y = HERO_Y + 20 + glyph_h + scale * 2;
-            let small_cell_h = FontSize::Small.cell_h();
+            let reasons_y = (HERO_Y + glyph_h + FontSize::Hero.line_gap())
+                .min(HERO_Y + HERO_H / 2);
+            let small_glyph_h = FontSize::Small.glyph_h();
+            let small_step = small_glyph_h + FontSize::Small.line_gap();
             let max_items = 4usize;
             for (i, item) in missing.iter().take(max_items).enumerate() {
-                let ry = reasons_y + i as u32 * (small_cell_h + 2);
-                if ry + FontSize::Small.glyph_h() > HERO_Y + HERO_H {
+                let ry = reasons_y + i as u32 * small_step;
+                if ry + small_glyph_h > HERO_Y + HERO_H {
                     break;
                 }
                 fill_rect_xy(buf, pad_x, ry + 6, 6, 6, false);
@@ -761,7 +767,7 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
                 break;
             }
             draw_text_scaled(buf, x, y, line, FontSize::Small, false, CTX_LEFT_W - 16);
-            y += FontSize::Small.cell_h() + 2;
+            y += FontSize::Small.glyph_h() + FontSize::Small.line_gap();
         }
     }
     if let Some(road) = &ctx.road {
@@ -810,7 +816,7 @@ fn render_context(buf: &mut PixelBuffer, layout: &DisplayLayout) {
                 break;
             }
             draw_text_scaled(buf, x, y, line, FontSize::Micro, false, CTX_RIGHT_W - 16);
-            y += FontSize::Micro.cell_h() + 2;
+            y += FontSize::Micro.glyph_h() + FontSize::Micro.line_gap();
         }
     }
 }
@@ -1205,5 +1211,46 @@ mod tests {
         };
         render_sparkline(&mut buf, 5, 5, 380, 22, &spark);
         assert!(buf.pixels.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn nogo_bullets_render_within_hero_zone() {
+        use crate::presentation::{
+            ContextContent, DataContent, DisplayLayout, HeaderContent, HeroContent, HeroDecision,
+        };
+        // Verify that reason bullets render within the hero zone (y = HERO_Y..HERO_Y+HERO_H).
+        // With the line_gap fix, reasons_y is capped at HERO_Y + HERO_H / 2, ensuring
+        // all bullets fall inside the zone regardless of scale factor.
+        let layout = DisplayLayout {
+            header: HeaderContent {
+                app_name: "SKAGIT FLATS".to_string(),
+                river_site: None,
+                last_updated: None,
+            },
+            hero: HeroContent {
+                decision: HeroDecision::NoGo {
+                    destination: "Test".to_string(),
+                    reasons: vec![
+                        "Reason one".to_string(),
+                        "Reason two".to_string(),
+                        "Reason three".to_string(),
+                        "Reason four".to_string(),
+                    ],
+                },
+                weather: None,
+            },
+            data: DataContent { river: None, ferry: None },
+            context: ContextContent { trail: None, road: None },
+        };
+        let mut buf = PixelBuffer::new(800, 480);
+        layout_and_render_display(&layout, &mut buf);
+
+        // Check that there are black pixels in the lower half of the hero zone
+        // (where bullets are positioned after the line_gap fix).
+        let hero_lower_start = HERO_Y + HERO_H / 2;
+        let hero_bottom = HERO_Y + HERO_H;
+        let has_bullets = (hero_lower_start..hero_bottom)
+            .any(|y| (0..800u32).any(|x| buf.get_pixel(x, y)));
+        assert!(has_bullets, "Expected bullet pixels in hero zone lower half (y={}..{})", hero_lower_start, hero_bottom);
     }
 }
