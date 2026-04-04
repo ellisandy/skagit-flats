@@ -83,20 +83,20 @@ fn fill_rect(buf: &mut PixelBuffer, r: Rect, black: bool) {
     }
 }
 
-/// Draw a single glyph at (x, y) using the base 5×7 font.
+/// Draw a single glyph at (x, y) using the base 8×16 font.
 fn draw_glyph(buf: &mut PixelBuffer, x: u32, y: u32, ch: char, invert: bool) {
     let glyph = font::glyph(ch);
     for row in 0..GLYPH_HEIGHT {
         let bits = glyph[row as usize];
         for col in 0..GLYPH_WIDTH {
-            let pixel_on = (bits >> (4 - col)) & 1 == 1;
+            let pixel_on = (bits >> (7 - col)) & 1 == 1;
             let draw_black = if invert { !pixel_on } else { pixel_on };
             buf.set_pixel(x + col, y + row, draw_black);
         }
     }
 }
 
-/// Draw a string using the base 5×7 font. Returns the number of chars drawn.
+/// Draw a string using the base 8×16 font. Returns the number of chars drawn.
 fn draw_text(
     buf: &mut PixelBuffer,
     x: u32,
@@ -260,7 +260,7 @@ const CTX_RIGHT_W: u32 = 400;
 
 /// Draw a scaled glyph at (x, y) using a given FontSize.
 ///
-/// Each pixel in the base 5×7 glyph becomes a scale×scale filled block.
+/// Each pixel in the base 8×16 glyph becomes a scale×scale filled block.
 fn draw_glyph_scaled(
     buf: &mut PixelBuffer,
     x: u32,
@@ -274,7 +274,7 @@ fn draw_glyph_scaled(
     for row in 0..GLYPH_HEIGHT {
         let bits = g[row as usize];
         for col in 0..GLYPH_WIDTH {
-            let pixel_on = (bits >> (4 - col)) & 1 == 1;
+            let pixel_on = (bits >> (7 - col)) & 1 == 1;
             let draw_black = if invert { !pixel_on } else { pixel_on };
             if draw_black {
                 let px = x + col * scale;
@@ -1154,7 +1154,7 @@ mod tests {
     fn draw_text_scaled_hero_fits_go() {
         let mut buf = PixelBuffer::new(800, 480);
         let w = draw_text_scaled(&mut buf, 0, 0, "GO", FontSize::Hero, false, 490);
-        // "GO" = 2 chars × Hero cell_w (70+4=74) = 148px (spacing capped at 4px)
+        // "GO" = 2 chars × Hero cell_w (112+4=116) = 232px (spacing capped at 4px)
         assert_eq!(w, 2 * FontSize::Hero.cell_w());
     }
 
