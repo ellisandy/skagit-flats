@@ -1,8 +1,11 @@
+use std::io::Read as IoRead;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Form, Path, Query, Request, State};
 use axum::http::{header, StatusCode};
-use axum::response::{Html, IntoResponse};
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 
@@ -13,29 +16,203 @@ use crate::evaluation::{current_unix_secs, evaluate};
 use crate::presentation::build_display_layout;
 use crate::render::render_display;
 
+const SESSION_COOKIE: &str = "sf_session";
+const SESSION_TTL: Duration = Duration::from_secs(86400); // 24 hours
+
+fn generate_session_token() -> String {
+    let mut buf = [0u8; 16];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut buf);
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn extract_session_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookie_str = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in cookie_str.split(';') {
+        let part = part.trim();
+        if let Some(val) = part.strip_prefix("sf_session=") {
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_session_valid(state: &SharedState, token: &str) -> bool {
+    let sessions = state.sessions.read().expect("sessions lock poisoned");
+    sessions
+        .get(token)
+        .map(|&created: &Instant| created.elapsed() < SESSION_TTL)
+        .unwrap_or(false)
+}
+
+async fn auth_middleware(
+    State(state): State<Arc<SharedState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.auth.is_none() {
+        return next.run(request).await;
+    }
+    let token = extract_session_cookie(request.headers());
+    let valid = token
+        .as_deref()
+        .map(|t| is_session_valid(&state, t))
+        .unwrap_or(false);
+    if valid {
+        next.run(request).await
+    } else {
+        Redirect::to("/login").into_response()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LoginForm {
+    username: String,
+    password: String,
+}
+
+fn login_page_html(error: bool) -> String {
+    let error_html = if error {
+        r#"<p class="login-error">Incorrect username or password.</p>"#
+    } else {
+        ""
+    };
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skagit Flats — Login</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #f0f0f0; color: #222; display: flex; flex-direction: column; min-height: 100vh; }}
+  .page-header {{ background: #1a1a2e; color: #fff; padding: 0.75rem 1rem; }}
+  .page-header h1 {{ font-size: 1.1rem; font-weight: 600; letter-spacing: 0.06em; }}
+  main {{ flex: 1; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }}
+  .login-card {{ background: #fff; border-radius: 12px; padding: 2rem 1.5rem; box-shadow: 0 2px 12px rgba(0,0,0,.12); width: 100%; max-width: 360px; }}
+  .login-title {{ font-size: 1.1rem; font-weight: 700; margin-bottom: 1.25rem; color: #1a1a2e; }}
+  .form-field {{ margin-bottom: 0.9rem; }}
+  .form-field label {{ display: block; font-size: 0.82rem; font-weight: 600; color: #555; margin-bottom: 0.3rem; }}
+  .form-field input {{ width: 100%; padding: 0.6rem 0.8rem; border: 1.5px solid #ddd; border-radius: 6px; font-size: 1rem; min-height: 44px; background: #fafafa; }}
+  .form-field input:focus {{ outline: 2px solid #3498db; border-color: transparent; background: #fff; }}
+  .btn-login {{ background: #1a1a2e; color: #fff; border: none; border-radius: 6px; width: 100%; font-size: 1rem; font-weight: 600; min-height: 44px; cursor: pointer; margin-top: 0.5rem; }}
+  .btn-login:active {{ opacity: 0.85; }}
+  .login-error {{ color: #c0392b; font-size: 0.875rem; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: #fff0f0; border-radius: 6px; border: 1px solid #f5c6cb; }}
+</style>
+</head>
+<body>
+<header class="page-header"><h1>SKAGIT FLATS</h1></header>
+<main>
+  <div class="login-card">
+    <div class="login-title">Sign in</div>
+    {error_html}
+    <form method="POST" action="/login">
+      <div class="form-field">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required autocomplete="username" autofocus>
+      </div>
+      <div class="form-field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn-login">Sign in</button>
+    </form>
+  </div>
+</main>
+</body>
+</html>"##,
+        error_html = error_html,
+    )
+}
+
+async fn handler_login_form(State(state): State<Arc<SharedState>>) -> Response {
+    if state.auth.is_none() {
+        return Redirect::to("/").into_response();
+    }
+    Html(login_page_html(false)).into_response()
+}
+
+async fn handler_login(
+    State(state): State<Arc<SharedState>>,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    let auth = match &state.auth {
+        None => return Redirect::to("/").into_response(),
+        Some(a) => a,
+    };
+
+    if form.username == auth.username && form.password == auth.password {
+        let token = generate_session_token();
+        {
+            let mut sessions = state.sessions.write().expect("sessions lock poisoned");
+            sessions.insert(token.clone(), Instant::now());
+        }
+        let cookie = format!(
+            "{}={}; HttpOnly; SameSite=Strict; Path=/",
+            SESSION_COOKIE, token
+        );
+        axum::http::Response::builder()
+            .status(StatusCode::SEE_OTHER)
+            .header(header::LOCATION, "/")
+            .header(header::SET_COOKIE, cookie)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    } else {
+        Html(login_page_html(true)).into_response()
+    }
+}
+
+async fn handler_logout(State(state): State<Arc<SharedState>>, request: Request) -> Response {
+    if let Some(token) = extract_session_cookie(request.headers()) {
+        let mut sessions = state.sessions.write().expect("sessions lock poisoned");
+        sessions.remove(&token);
+    }
+    let clear_cookie = format!(
+        "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+        SESSION_COOKIE
+    );
+    axum::http::Response::builder()
+        .status(StatusCode::SEE_OTHER)
+        .header(header::LOCATION, "/login")
+        .header(header::SET_COOKIE, clear_cookie)
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
 /// Fixture RDB returned when SKAGIT_FIXTURE_DATA=1 for gauge search.
 const FIXTURE_SITES_RDB: &str = include_str!("../sources/fixtures/usgs_sites.rdb");
 
 /// Build the axum Router for the local web interface.
 pub fn build_router(state: Arc<SharedState>) -> Router {
-    Router::new()
+    // Protected routes require a valid session when auth is configured.
+    let protected = Router::new()
         .route("/", get(handler_index))
-        .route("/health", get(handler_health))
-        .route("/health/hardware", get(handler_health_hardware))
         .route("/preview", get(handler_preview))
         .route("/sources", get(handler_sources))
         .route("/destinations", get(handler_list_destinations))
         .route("/destinations", post(handler_upsert_destination))
         .route("/destinations/:name", delete(handler_delete_destination))
-        .route(
-            "/sources/:name/enable",
-            post(handler_enable_source),
-        )
-        .route(
-            "/sources/:name/disable",
-            post(handler_disable_source),
-        )
+        .route("/sources/:name/enable", post(handler_enable_source))
+        .route("/sources/:name/disable", post(handler_disable_source))
         .route("/setup/gauges", get(handler_gauge_search))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth_middleware,
+        ));
+
+    Router::new()
+        .merge(protected)
+        // Health endpoints are always public (monitoring, readiness probes).
+        .route("/health", get(handler_health))
+        .route("/health/hardware", get(handler_health_hardware))
+        // Auth endpoints are always public.
+        .route("/login", get(handler_login_form))
+        .route("/login", post(handler_login))
+        .route("/logout", post(handler_logout))
         .with_state(state)
 }
 
@@ -1090,6 +1267,27 @@ mod tests {
             display_height: 480,
             hardware_error: RwLock::new(None),
             fixture_data: false,
+            auth: None,
+            sessions: RwLock::new(std::collections::HashMap::new()),
+        })
+    }
+
+    fn test_state_with_auth() -> Arc<SharedState> {
+        Arc::new(SharedState {
+            pixel_buffer: RwLock::new(PixelBuffer::new(800, 480)),
+            source_statuses: RwLock::new(vec![]),
+            destinations_config: RwLock::new(DestinationsConfig::default()),
+            domain_state: RwLock::new(DomainState::default()),
+            destinations_path: "/tmp/skagit-test-destinations.toml".into(),
+            display_width: 800,
+            display_height: 480,
+            hardware_error: RwLock::new(None),
+            fixture_data: false,
+            auth: Some(crate::config::AuthConfig {
+                username: "admin".to_string(),
+                password: "secret".to_string(),
+            }),
+            sessions: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -1163,6 +1361,8 @@ mod tests {
             display_height: 480,
             hardware_error: RwLock::new(None),
             fixture_data: true,
+            auth: None,
+            sessions: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -1425,5 +1625,195 @@ mod tests {
     fn haversine_km_known_distance() {
         let d = haversine_km(47.6062, -122.3321, 45.5051, -122.6750);
         assert!((d - 235.0).abs() < 10.0, "Seattle-Portland distance ~235 km, got {d:.1}");
+    }
+
+    // --- Auth tests ---
+
+    #[tokio::test]
+    async fn no_auth_config_allows_access_without_login() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_config_redirects_unauthenticated_to_login() {
+        let app = build_router(test_state_with_auth());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[tokio::test]
+    async fn login_form_served_when_auth_configured() {
+        let app = build_router(test_state_with_auth());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Sign in"));
+        assert!(html.contains(r#"action="/login""#));
+    }
+
+    #[tokio::test]
+    async fn login_form_redirects_to_home_when_no_auth() {
+        let app = build_router(test_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/");
+    }
+
+    #[tokio::test]
+    async fn valid_credentials_set_session_cookie_and_redirect() {
+        let state = test_state_with_auth();
+        let app = build_router(Arc::clone(&state));
+        let body = "username=admin&password=secret";
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/");
+        let cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(cookie.contains("sf_session="), "Set-Cookie should contain sf_session");
+        assert!(cookie.contains("HttpOnly"));
+        // Session should be stored in state
+        let sessions = state.sessions.read().unwrap();
+        assert_eq!(sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_credentials_return_login_form_with_error() {
+        let app = build_router(test_state_with_auth());
+        let body = "username=admin&password=wrong";
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000).await.unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Incorrect username or password"));
+    }
+
+    #[tokio::test]
+    async fn valid_session_cookie_grants_access() {
+        let state = test_state_with_auth();
+        // Pre-insert a session token
+        let token = "testtoken1234567890abcdef";
+        {
+            let mut sessions = state.sessions.write().unwrap();
+            sessions.insert(token.to_string(), std::time::Instant::now());
+        }
+        let app = build_router(Arc::clone(&state));
+        let cookie_header = format!("sf_session={}", token);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("cookie", cookie_header)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn logout_clears_session_and_redirects_to_login() {
+        let state = test_state_with_auth();
+        let token = "logouttoken1234567890abcd";
+        {
+            let mut sessions = state.sessions.write().unwrap();
+            sessions.insert(token.to_string(), std::time::Instant::now());
+        }
+        let app = build_router(Arc::clone(&state));
+        let cookie_header = format!("sf_session={}", token);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/logout")
+                    .header("cookie", cookie_header)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
+        // Session should be removed
+        let sessions = state.sessions.read().unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_accessible_without_auth() {
+        let app = build_router(test_state_with_auth());
+        let resp = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn extract_session_cookie_parses_correctly() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "sf_session=abc123; other=val".parse().unwrap(),
+        );
+        assert_eq!(extract_session_cookie(&headers), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn extract_session_cookie_returns_none_when_absent() {
+        let headers = axum::http::HeaderMap::new();
+        assert_eq!(extract_session_cookie(&headers), None);
+    }
+
+    #[test]
+    fn generate_session_token_produces_32_hex_chars() {
+        let token = generate_session_token();
+        assert_eq!(token.len(), 32);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

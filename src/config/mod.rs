@@ -3,6 +3,26 @@ use serde::Deserialize;
 use std::path::Path;
 use thiserror::Error;
 
+/// Optional authentication for the web UI.
+///
+/// If absent, the web UI is accessible without credentials. When present,
+/// a username/password login form is shown and a session cookie is required
+/// to access all pages except `/health`.
+///
+/// Add to `config.toml`:
+/// ```toml
+/// [auth]
+/// username = "admin"
+/// password = "yourpassword"
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+pub struct AuthConfig {
+    /// Username for the web UI login form.
+    pub username: String,
+    /// Password for the web UI login form.
+    pub password: String,
+}
+
 /// Top-level runtime configuration loaded from config.toml.
 /// This file is never written at runtime; changes require a restart.
 #[derive(Debug, Deserialize, Clone)]
@@ -10,6 +30,9 @@ pub struct Config {
     pub display: DisplayConfig,
     pub location: LocationConfig,
     pub sources: SourceIntervals,
+    /// Optional web UI authentication. If absent, no login is required.
+    #[serde(default)]
+    pub auth: Option<AuthConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

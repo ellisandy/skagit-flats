@@ -9,10 +9,11 @@ use crate::sources::usgs::UsgsSource;
 use crate::sources::wsdot::WsdotFerrySource;
 use crate::sources::Source;
 use crate::web;
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Shared state between the main loop and the web server.
 pub struct SharedState {
@@ -34,6 +35,10 @@ pub struct SharedState {
     pub hardware_error: RwLock<Option<String>>,
     /// Whether the app is running in fixture data mode.
     pub fixture_data: bool,
+    /// Web UI authentication configuration (None = no auth required).
+    pub auth: Option<crate::config::AuthConfig>,
+    /// Active web UI sessions: token → creation time.
+    pub sessions: RwLock<HashMap<String, Instant>>,
 }
 
 /// Status of a single data source, exposed via GET /sources.
@@ -397,6 +402,8 @@ pub fn start_web_server(
         display_height: config.display.height,
         hardware_error: RwLock::new(None),
         fixture_data: opts.fixture_data,
+        auth: config.auth.clone(),
+        sessions: RwLock::new(HashMap::new()),
     });
 
     let state = Arc::clone(&shared);

@@ -10,7 +10,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 use skagit_flats::app::{SharedState, SourceStatus};
-use skagit_flats::config::{Destination, DestinationsConfig};
+use skagit_flats::config::{AuthConfig, Destination, DestinationsConfig};
 use skagit_flats::domain::{
     DomainState, FerryStatus, RiverGauge, RoadStatus, TrailCondition, TripCriteria,
     WeatherObservation,
@@ -137,6 +137,8 @@ fn populated_state() -> Arc<SharedState> {
         display_height: 480,
         hardware_error: RwLock::new(None),
         fixture_data: false,
+        auth: None,
+        sessions: RwLock::new(std::collections::HashMap::new()),
     })
 }
 
@@ -608,4 +610,183 @@ fn full_render_pipeline_fixture_data() {
     // PNG should be valid
     let png = buf.to_png();
     assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
+}
+
+// --- Authentication ---
+
+fn state_with_auth(username: &str, password: &str) -> Arc<SharedState> {
+    let base = populated_state();
+    let pixel_buffer = base.pixel_buffer.read().unwrap().clone();
+    let source_statuses = base.source_statuses.read().unwrap().clone();
+    let destinations_config = base.destinations_config.read().unwrap().clone();
+    let domain_state = base.domain_state.read().unwrap().clone();
+    let destinations_path = base.destinations_path.clone();
+    let display_width = base.display_width;
+    let display_height = base.display_height;
+    Arc::new(SharedState {
+        pixel_buffer: RwLock::new(pixel_buffer),
+        source_statuses: RwLock::new(source_statuses),
+        destinations_config: RwLock::new(destinations_config),
+        domain_state: RwLock::new(domain_state),
+        destinations_path,
+        display_width,
+        display_height,
+        hardware_error: RwLock::new(None),
+        fixture_data: false,
+        auth: Some(AuthConfig {
+            username: username.to_string(),
+            password: password.to_string(),
+        }),
+        sessions: RwLock::new(std::collections::HashMap::new()),
+    })
+}
+
+#[tokio::test]
+async fn unauthenticated_request_redirects_to_login() {
+    let app = build_router(state_with_auth("admin", "secret"));
+    let resp = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.headers().get("location").unwrap(), "/login");
+}
+
+#[tokio::test]
+async fn health_endpoint_bypasses_auth() {
+    let app = build_router(state_with_auth("admin", "secret"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn login_form_served_at_login_route() {
+    let app = build_router(state_with_auth("admin", "secret"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 10_000).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<form"), "login page must contain a form");
+    assert!(html.contains(r#"type="password""#), "login page must have password field");
+    assert!(html.contains(r#"type="text""#), "login page must have username field");
+}
+
+#[tokio::test]
+async fn valid_login_sets_session_cookie_and_redirects_to_root() {
+    let state = state_with_auth("admin", "secret");
+    let app = build_router(Arc::clone(&state));
+    let body = "username=admin&password=secret";
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.headers().get("location").unwrap(), "/");
+    let cookie = resp
+        .headers()
+        .get("set-cookie")
+        .expect("must set a session cookie")
+        .to_str()
+        .unwrap();
+    assert!(cookie.contains("sf_session="), "cookie must be sf_session");
+    assert!(cookie.contains("HttpOnly"), "cookie must be HttpOnly");
+
+    // Session must have been stored in state
+    let sessions = state.sessions.read().unwrap();
+    assert_eq!(sessions.len(), 1, "one session should be created");
+}
+
+#[tokio::test]
+async fn invalid_credentials_returns_login_form_with_error() {
+    let app = build_router(state_with_auth("admin", "secret"));
+    let body = "username=admin&password=wrong";
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 10_000).await.unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        html.contains("Incorrect username or password"),
+        "error message must appear on bad login"
+    );
+}
+
+#[tokio::test]
+async fn authenticated_session_allows_protected_route_access() {
+    let state = state_with_auth("admin", "s3cr3t");
+
+    // Log in to get a session token
+    let app = build_router(Arc::clone(&state));
+    let login_resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("username=admin&password=s3cr3t"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_resp.status(), StatusCode::SEE_OTHER);
+    let set_cookie = login_resp
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    // Extract just the token value from "sf_session=<token>; ..."
+    let cookie_header = set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+
+    // Use the session cookie to access the protected index page
+    let app = build_router(Arc::clone(&state));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header("cookie", cookie_header)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
