@@ -20,10 +20,27 @@ pub struct DeviceConfig {
     /// How often to fetch and refresh the display, in seconds.
     #[serde(default = "default_refresh_secs")]
     pub refresh_interval_secs: u64,
+    /// Use partial refresh for ghost-free updates between full refreshes.
+    ///
+    /// Only works on Waveshare 7.5" V2 panels manufactured **after September 2023**.
+    /// Earlier panels use the same model number but lack the partial-mode firmware
+    /// paths — enabling this on an older panel will likely produce no output or
+    /// corrupted frames. Check the date sticker on the back of the panel before
+    /// enabling. Defaults to `false` for safety.
+    #[serde(default)]
+    pub partial_refresh: bool,
+    /// Number of consecutive partial refreshes before forcing a full refresh
+    /// to clear accumulated ghosting. Ignored when `partial_refresh = false`.
+    #[serde(default = "default_partial_cadence")]
+    pub partial_refresh_cadence: u32,
 }
 
 fn default_refresh_secs() -> u64 {
     60
+}
+
+fn default_partial_cadence() -> u32 {
+    30
 }
 
 /// Display panel dimensions. Must match the connected hardware.
@@ -90,7 +107,7 @@ height = 480
     }
 
     #[test]
-    fn refresh_interval_defaults_to_60() {
+    fn defaults_when_only_required_fields_set() {
         let toml = r#"
 [device]
 image_url = "http://example.com/image.png"
@@ -103,6 +120,27 @@ height = 480
         f.write_all(toml.as_bytes()).unwrap();
         let cfg = load_config(f.path()).expect("should parse");
         assert_eq!(cfg.device.refresh_interval_secs, 60);
+        assert!(!cfg.device.partial_refresh);
+        assert_eq!(cfg.device.partial_refresh_cadence, 30);
+    }
+
+    #[test]
+    fn partial_refresh_fields_override_defaults() {
+        let toml = r#"
+[device]
+image_url = "http://example.com/image.png"
+partial_refresh = true
+partial_refresh_cadence = 50
+
+[display]
+width = 800
+height = 480
+"#;
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(toml.as_bytes()).unwrap();
+        let cfg = load_config(f.path()).expect("should parse");
+        assert!(cfg.device.partial_refresh);
+        assert_eq!(cfg.device.partial_refresh_cadence, 50);
     }
 
     #[test]
