@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/skagit-flats --config /etc/skagit-flats/config.toml --destinations /etc/skagit-flats/destinations.toml --port 8080
+ExecStart=/usr/local/bin/skagit-flats --config /etc/skagit-flats/config.toml
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info

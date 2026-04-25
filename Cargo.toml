@@ -2,42 +2,30 @@
 name = "skagit-flats"
 version = "0.1.0"
 edition = "2021"
-description = "E-ink dashboard daemon for the Skagit Valley"
+description = "Thin e-ink display client — fetches a pre-rendered PNG and pushes it to a Waveshare 7.5\" panel"
 license = "MIT"
 
 [features]
 default = []
-# Enable the SPI hardware display driver (Raspberry Pi only)
+# Enable the SPI hardware display driver (Raspberry Pi only).
 hardware = ["rppal"]
 
 [dependencies]
-# Serialization
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
-# Web framework (tokio runtime isolated to one thread in app)
-axum = "0.7"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-
-# Image output for web preview PNG
+# PNG decode for the fetched image.
 image = { version = "0.24", default-features = false, features = ["png"] }
 
-# Raspberry Pi SPI/GPIO — optional, only needed for hardware mode
+# Blocking HTTP client for the fetch loop.
+ureq = "2"
+
+# Raspberry Pi SPI/GPIO — optional, only needed for hardware mode.
 rppal = { version = "0.17", optional = true }
 
-# HTTP client (blocking — sources run on dedicated threads)
-ureq = { version = "2", features = ["json"] }
-serde_json = "1"
-
-# Error handling
 thiserror = "1"
-
-# Logging
 log = "0.4"
 env_logger = "0.11"
 
 [dev-dependencies]
 tempfile = "3"
-tower = { version = "0.4", features = ["util"] }
-# TrueType rendering spike (sf-rb0) — evaluate fontdue for 1-bit e-ink output
-fontdue = "0.9"

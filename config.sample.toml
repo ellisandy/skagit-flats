@@ -1,57 +1,13 @@
-# skagit-flats sample configuration
+# skagit-flats sample configuration.
 # Copy to config.toml and edit for your setup.
-# This file is never written at runtime — changes require a restart.
 
-# Device display loop: fetch a pre-rendered PNG from the server and display it.
-# The server exposes GET /image.png which returns image/png directly.
 [device]
-image_url = "http://skagit.local:8080/image.png"
+# URL of the pre-rendered display image. The endpoint must return image/png.
+image_url = "http://127.0.0.1:9090/image.png"
+# How often to fetch and refresh the display, in seconds.
 refresh_interval_secs = 60
 
 [display]
+# Must match the connected panel. Waveshare 7.5" v2 = 800x480.
 width = 800
 height = 480
-
-[location]
-latitude = 48.4232
-longitude = -122.3351
-name = "Mount Vernon, WA"
-
-[sources]
-# How often to poll each source, in seconds.
-weather_interval_secs = 300   # 5 minutes
-river_interval_secs = 300     # 5 minutes
-ferry_interval_secs = 60      # 1 minute
-trail_interval_secs = 900     # 15 minutes
-road_interval_secs = 1800     # 30 minutes
-
-[sources.river]
-# USGS site ID for river gauge data (default: "12200500" = Skagit River near Mount Vernon)
-#
-# To find your site ID:
-#   1. Go to https://waterdata.usgs.gov/nwis/rt and search for a river near you.
-#   2. Click a monitoring station in the results.
-#   3. The site ID is the number in the URL:
-#      https://waterdata.usgs.gov/monitoring-location/12200500/
-#                                                       ^^^^^^^^ this is the site ID
-usgs_site_id = "12200500"
-
-[sources.trail]
-# NPS park code for trail condition alerts (default: "noca" = North Cascades)
-#
-# To find your park code:
-#   1. Go to https://www.nps.gov/findapark/ and search for your park.
-#   2. Click the park. The park code is the short slug in the URL:
-#      https://www.nps.gov/noca/index.htm
-#                           ^^^^ this is the park code
-park_code = "noca"
-# NPS API key — register free at https://www.nps.gov/subjects/developer/get-started.htm
-# Can also be set via NPS_API_KEY environment variable.
-# nps_api_key = "YOUR_KEY_HERE"
-
-[sources.road]
-# WSDOT route numbers to monitor for closures (default: ["020"] = SR-20)
-routes = ["020", "005", "530"]
-# WSDOT Traveler Information API access code — register free at wsdot.wa.gov/traffic/api/
-# Can also be set via WSDOT_ACCESS_CODE environment variable.
-# wsdot_access_code = "YOUR_KEY_HERE"

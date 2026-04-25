@@ -1,8 +1,7 @@
 /target/
 
-# User-edited config files (only samples are committed)
+# User-edited config (only the sample is committed)
 config.toml
-destinations.toml
 
 # Gas Town (added by gt)
 .runtime/
