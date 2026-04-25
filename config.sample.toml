@@ -7,7 +7,22 @@ image_url = "http://127.0.0.1:9090/image.png"
 # How often to fetch and refresh the display, in seconds.
 refresh_interval_secs = 60
 
+# Use partial refresh for ghost-free updates between full refreshes.
+#
+# WARNING: only works on Waveshare 7.5" V2 panels manufactured AFTER
+# September 2023. Earlier panels share the same model number but lack the
+# partial-mode firmware paths — enabling this on an older panel will likely
+# produce no output or corrupted frames. Check the date sticker on the back
+# of the panel before flipping this on.
+#
+# When true, the loop uses partial refresh (~0.4s, no flash) for most updates
+# and forces a full refresh (~2s, visible flash) every `partial_refresh_cadence`
+# partial refreshes to clear accumulated ghosting.
+partial_refresh = false
+partial_refresh_cadence = 30
+
+# Display panel dimensions. Must match the connected panel.
+# Waveshare 7.5" v2 = 800x480.
 [display]
-# Must match the connected panel. Waveshare 7.5" v2 = 800x480.
 width = 800
 height = 480
