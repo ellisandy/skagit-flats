@@ -87,6 +87,11 @@ pub fn run(opts: AppOptions, config: Config) {
         config.display.height,
     );
 
+    // Last successfully-pushed frame. We skip pushing identical frames so the
+    // panel doesn't trigger its full-refresh waveform (the visible black/white
+    // flash) when nothing has changed upstream.
+    let mut last_pushed: Option<Vec<u8>> = None;
+
     loop {
         match fetch_image(
             &config.device.image_url,
@@ -94,8 +99,13 @@ pub fn run(opts: AppOptions, config: Config) {
             config.display.height,
         ) {
             Ok(buf) => {
-                if let Err(e) = display.update(&buf, RefreshMode::Full) {
-                    log::error!("display update failed: {e}");
+                if last_pushed.as_ref() == Some(&buf.pixels) {
+                    log::debug!("image unchanged, skipping display update");
+                } else {
+                    match display.update(&buf, RefreshMode::Full) {
+                        Ok(()) => last_pushed = Some(buf.pixels),
+                        Err(e) => log::error!("display update failed: {e}"),
+                    }
                 }
             }
             Err(e) => log::error!("image fetch failed: {e}"),
