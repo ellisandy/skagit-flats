@@ -38,10 +38,17 @@ panel and survive flaky networks.
 ## Display constraints
 
 - **800×480, 1-bit.** Size mismatch fails the Waveshare driver hard.
-- Full refresh (~2s) is the only mode in use right now. Partial refresh
-  exists in the trait but isn't wired up to the loop.
-- The driver inverts and sends both DTM1 (old frame) and DTM2 (new frame)
-  per refresh — see `src/display/waveshare.rs` for command sequencing.
+- Two refresh modes wired up:
+  - **Full** (~2s, visible flash, clears ghosting). Always available.
+  - **Partial** (~0.4s, no flash, accumulates ghosting). Opt-in via
+    `device.partial_refresh = true` in config. Only works on panels
+    manufactured after September 2023.
+- `app::run` schedules modes: full on first push and once every
+  `partial_refresh_cadence` partials (default 30); partial otherwise.
+- Full refresh inverts the buffer and sends both DTM1 (old frame) and
+  DTM2 (new frame). Partial refresh sends only DTM2 inside a partial
+  window covering the panel — see `display_frame_partial` in
+  `src/display/waveshare.rs` for the full SPI sequence.
 
 ## Cross-compilation
 

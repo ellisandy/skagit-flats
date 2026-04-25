@@ -54,6 +54,9 @@ impl AppOptions {
 pub fn run(opts: AppOptions, config: Config) {
     log::info!("skagit-flats device loop starting");
 
+    let partial_enabled = config.device.partial_refresh;
+    let cadence = config.device.partial_refresh_cadence;
+
     let mut display: Box<dyn DisplayDriver> = if opts.no_hardware {
         log::info!("no-hardware mode: using NullDisplay");
         Box::new(NullDisplay)
@@ -61,7 +64,7 @@ pub fn run(opts: AppOptions, config: Config) {
         #[cfg(feature = "hardware")]
         {
             log::info!("hardware mode: initializing Waveshare SPI display");
-            match crate::display::waveshare::WaveshareDisplay::new() {
+            match crate::display::waveshare::WaveshareDisplay::new(partial_enabled) {
                 Ok(d) => Box::new(d),
                 Err(e) => {
                     log::error!(
@@ -73,6 +76,7 @@ pub fn run(opts: AppOptions, config: Config) {
         }
         #[cfg(not(feature = "hardware"))]
         {
+            let _ = partial_enabled;
             log::info!("hardware feature not enabled, using NullDisplay");
             Box::new(NullDisplay)
         }
@@ -88,9 +92,12 @@ pub fn run(opts: AppOptions, config: Config) {
     );
 
     // Last successfully-pushed frame. We skip pushing identical frames so the
-    // panel doesn't trigger its full-refresh waveform (the visible black/white
-    // flash) when nothing has changed upstream.
+    // panel doesn't refresh at all when nothing has changed upstream.
     let mut last_pushed: Option<Vec<u8>> = None;
+    // How many consecutive partial refreshes have happened since the last full
+    // refresh. Reset to 0 on each full refresh; when it hits `cadence`, the
+    // next push is forced to full to clear accumulated ghosting.
+    let mut partial_count: u32 = 0;
 
     loop {
         match fetch_image(
@@ -102,15 +109,52 @@ pub fn run(opts: AppOptions, config: Config) {
                 if last_pushed.as_ref() == Some(&buf.pixels) {
                     log::debug!("image unchanged, skipping display update");
                 } else {
-                    match display.update(&buf, RefreshMode::Full) {
-                        Ok(()) => last_pushed = Some(buf.pixels),
-                        Err(e) => log::error!("display update failed: {e}"),
+                    let mode =
+                        pick_refresh_mode(partial_enabled, last_pushed.is_none(), partial_count, cadence);
+                    log::debug!(
+                        "image changed, refreshing ({mode:?}, partial_count={partial_count}/{cadence})"
+                    );
+                    match display.update(&buf, mode) {
+                        Ok(()) => {
+                            last_pushed = Some(buf.pixels);
+                            match mode {
+                                RefreshMode::Full => partial_count = 0,
+                                RefreshMode::Partial => partial_count += 1,
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("display update failed ({mode:?}): {e}");
+                            // Force a full refresh on the next attempt to
+                            // recover from any stuck partial-mode state.
+                            partial_count = cadence;
+                        }
                     }
                 }
             }
             Err(e) => log::error!("image fetch failed: {e}"),
         }
         thread::sleep(refresh);
+    }
+}
+
+/// Decide which refresh mode to use for the next push.
+///
+/// Always picks `Full` when:
+/// - partial mode is disabled in config,
+/// - this is the first push since startup (panel state may be unknown), or
+/// - the partial-refresh counter has hit the cadence (force a ghost-cleanup full).
+///
+/// Otherwise picks `Partial`.
+fn pick_refresh_mode(
+    partial_enabled: bool,
+    is_first_push: bool,
+    partial_count: u32,
+    cadence: u32,
+) -> RefreshMode {
+    if !partial_enabled || is_first_push || partial_count >= cadence {
+        RefreshMode::Full
+    } else {
+        RefreshMode::Partial
     }
 }
 
@@ -175,5 +219,51 @@ mod tests {
         ];
         let opts = AppOptions::from_args(args);
         assert!(!opts.no_hardware);
+    }
+
+    #[test]
+    fn pick_refresh_mode_uses_full_when_partial_disabled() {
+        assert!(matches!(
+            pick_refresh_mode(false, false, 0, 30),
+            RefreshMode::Full
+        ));
+        // Even with mid-cadence count, disabled config wins.
+        assert!(matches!(
+            pick_refresh_mode(false, false, 15, 30),
+            RefreshMode::Full
+        ));
+    }
+
+    #[test]
+    fn pick_refresh_mode_uses_full_on_first_push() {
+        assert!(matches!(
+            pick_refresh_mode(true, true, 0, 30),
+            RefreshMode::Full
+        ));
+    }
+
+    #[test]
+    fn pick_refresh_mode_uses_partial_in_steady_state() {
+        assert!(matches!(
+            pick_refresh_mode(true, false, 0, 30),
+            RefreshMode::Partial
+        ));
+        assert!(matches!(
+            pick_refresh_mode(true, false, 29, 30),
+            RefreshMode::Partial
+        ));
+    }
+
+    #[test]
+    fn pick_refresh_mode_forces_full_at_cadence_boundary() {
+        assert!(matches!(
+            pick_refresh_mode(true, false, 30, 30),
+            RefreshMode::Full
+        ));
+        // After error recovery: count is bumped to/past cadence.
+        assert!(matches!(
+            pick_refresh_mode(true, false, 100, 30),
+            RefreshMode::Full
+        ));
     }
 }

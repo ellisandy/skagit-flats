@@ -38,10 +38,13 @@ mod driver {
         dc: OutputPin,
         pwr: OutputPin,
         busy: rppal::gpio::InputPin,
+        /// Enables the post-Sept-2023 panel revision's partial-refresh path
+        /// (`update()` with `RefreshMode::Partial` hits `display_frame_partial`).
+        partial_enabled: bool,
     }
 
     impl WaveshareDisplay {
-        pub fn new() -> Result<Self, DisplayError> {
+        pub fn new(partial_enabled: bool) -> Result<Self, DisplayError> {
             let gpio = Gpio::new().map_err(|e| DisplayError::Spi(format!("GPIO init: {e}")))?;
 
             let rst = gpio
@@ -74,16 +77,21 @@ mod driver {
                 dc,
                 pwr,
                 busy,
+                partial_enabled,
             };
 
             display.hw_reset()?;
             display.init_panel()?;
+            if partial_enabled {
+                display.init_partial_extensions()?;
+            }
 
             log::info!(
-                "WaveshareDisplay initialized ({}x{}, SPI @ {} Hz)",
+                "WaveshareDisplay initialized ({}x{}, SPI @ {} Hz, partial_refresh={})",
                 WIDTH,
                 HEIGHT,
-                SPI_CLOCK_HZ
+                SPI_CLOCK_HZ,
+                partial_enabled,
             );
             Ok(display)
         }
@@ -166,7 +174,7 @@ mod driver {
             self.send_command(0x15)?;
             self.send_data(&[0x00])?;
 
-            // VCOM and data interval setting.
+            // VCOM and data interval setting (full-refresh value).
             self.send_command(0x50)?;
             self.send_data(&[0x10, 0x07])?;
 
@@ -177,7 +185,54 @@ mod driver {
             Ok(())
         }
 
-        fn display_frame(&mut self, buffer: &[u8]) -> Result<(), DisplayError> {
+        /// Enable the post-Sept-2023 panel revision's fast/partial waveform paths.
+        ///
+        /// These two commands are not in the older Waveshare reference driver.
+        /// Without them, partial-mode commands silently no-op even on the right
+        /// silicon. With them, on a pre-Sept-2023 panel, behavior is undefined
+        /// (the partial-refresh feature gate in config exists to keep these off
+        /// for older panels). Ends with the panel powered off, matching the
+        /// "ready state" expected by the per-refresh power-cycle pattern.
+        fn init_partial_extensions(&mut self) -> Result<(), DisplayError> {
+            self.send_command(0xE0)?;
+            self.send_data(&[0x02])?;
+            self.send_command(0xE5)?;
+            self.send_data(&[0x5A])?;
+
+            self.send_command(0x02)?;
+            self.wait_busy()?;
+            Ok(())
+        }
+
+        fn power_on(&mut self) -> Result<(), DisplayError> {
+            self.send_command(0x04)?;
+            thread::sleep(Duration::from_millis(200));
+            self.wait_busy()?;
+            Ok(())
+        }
+
+        fn power_off(&mut self) -> Result<(), DisplayError> {
+            self.send_command(0x02)?;
+            self.wait_busy()?;
+            Ok(())
+        }
+
+        /// Full-waveform refresh. ~2s, visible black/white flash, clears ghosting.
+        ///
+        /// When `partial_enabled`, wraps the SPI sequence in a power-cycle so the
+        /// panel ends in the same "off" state that partial refresh expects. When
+        /// `partial_enabled` is false, the panel stays powered on (legacy
+        /// behavior — no surprises for users who explicitly chose to disable
+        /// partial mode, e.g. on older panel revisions).
+        fn display_frame_full(&mut self, buffer: &[u8]) -> Result<(), DisplayError> {
+            if self.partial_enabled {
+                self.power_on()?;
+                // Reset VCOM/data interval to the full-refresh value in case a
+                // prior partial refresh changed it.
+                self.send_command(0x50)?;
+                self.send_data(&[0x10, 0x07])?;
+            }
+
             // DTM1 (0x10): old frame = bitwise inverse of new image (for waveform calculation).
             self.send_command(0x10)?;
             let inverted: Vec<u8> = buffer.iter().map(|b| !b).collect();
@@ -192,12 +247,54 @@ mod driver {
             thread::sleep(Duration::from_millis(100));
             self.wait_busy()?;
 
+            if self.partial_enabled {
+                self.power_off()?;
+            }
             Ok(())
         }
 
-        fn power_off(&mut self) -> Result<(), DisplayError> {
-            self.send_command(0x02)?;
+        /// Partial-waveform refresh. ~0.4s, no visible flash, accumulates
+        /// ghosting after many cycles (caller must periodically force a full
+        /// refresh to clear it — see `app::run`).
+        ///
+        /// Mirrors the SPI sequence from ESPHome's `WaveshareEPaper7P5InV2P`
+        /// (esphome PR #7751, validated on a 2024-manufactured panel). The
+        /// partial window covers the entire panel, so the full buffer is sent —
+        /// no diff/bounding-box logic. The panel powers down after refresh.
+        fn display_frame_partial(&mut self, buffer: &[u8]) -> Result<(), DisplayError> {
+            self.power_on()?;
+
+            // VCOM and data interval setting (partial-mode value, differs from full).
+            self.send_command(0x50)?;
+            self.send_data(&[0xA9, 0x07])?;
+
+            // Activate partial waveform path.
+            self.send_command(0xE5)?;
+            self.send_data(&[0x6E])?;
+
+            // Enter partial mode (no data bytes).
+            self.send_command(0x91)?;
+
+            // Partial window: full panel.
+            self.send_command(0x90)?;
+            self.send_data(&[
+                0x00, 0x00,
+                ((WIDTH - 1) >> 8) as u8, ((WIDTH - 1) & 0xFF) as u8,
+                0x00, 0x00,
+                ((HEIGHT - 1) >> 8) as u8, ((HEIGHT - 1) & 0xFF) as u8,
+                0x01,
+            ])?;
+
+            // DTM2 (0x13): new frame data.
+            self.send_command(0x13)?;
+            self.send_data(buffer)?;
+
+            // Display refresh.
+            self.send_command(0x12)?;
+            thread::sleep(Duration::from_millis(100));
             self.wait_busy()?;
+
+            self.power_off()?;
             Ok(())
         }
     }
@@ -216,7 +313,18 @@ mod driver {
             }
 
             log::debug!("WaveshareDisplay: update ({mode:?})");
-            self.display_frame(&buffer.pixels)?;
+            match mode {
+                RefreshMode::Full => self.display_frame_full(&buffer.pixels)?,
+                RefreshMode::Partial => {
+                    if !self.partial_enabled {
+                        return Err(DisplayError::Spi(
+                            "partial refresh requested but partial_refresh is disabled in config"
+                                .to_string(),
+                        ));
+                    }
+                    self.display_frame_partial(&buffer.pixels)?;
+                }
+            }
 
             Ok(())
         }
@@ -225,8 +333,11 @@ mod driver {
             log::debug!("WaveshareDisplay: clearing display");
             self.init_panel()?;
             let white = vec![0x00u8; (WIDTH * HEIGHT / 8) as usize];
-            self.display_frame(&white)?;
-            self.power_off()?;
+            self.display_frame_full(&white)?;
+            if !self.partial_enabled {
+                // display_frame_full handles power-off when partial_enabled.
+                self.power_off()?;
+            }
             Ok(())
         }
     }
