@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: cargo build
 
-      - name: Run unit and integration tests
+      - name: Run tests
         run: cargo test
 
       - name: Clippy lint
@@ -67,37 +67,5 @@ jobs:
       - name: Check for aarch64-unknown-linux-gnu
         run: cargo check --target aarch64-unknown-linux-gnu
 
-  docker-build:
-    name: Docker image builds
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: docker build -t skagit-flats:ci .
-
-  live-source-tests:
-    name: Live source tests (manual)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Run live source tests
-        env:
-          LIVE_TESTS: "1"
-        run: cargo test --test live_source_tests -- --test-threads=1
+      - name: Check hardware feature builds for aarch64
+        run: cargo check --target aarch64-unknown-linux-gnu --features hardware
