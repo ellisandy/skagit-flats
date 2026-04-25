@@ -1,158 +1,68 @@
 # AGENTS.md — skagit-flats
 
-Guidance for AI agents (Claude, Copilot, etc.) working in this repository.
+Guidance for AI agents working in this repository.
 
----
+## What this is
 
-## What this project is
-
-`skagit-flats` is a Rust daemon that drives a Waveshare 7.5 inch e-ink display
-on a Raspberry Pi Zero 2 W. It fetches data from pluggable public-data sources
-(weather, river gauges, ferry schedules, trail conditions) and renders them as
-panels on the display. A local web interface allows configuration and preview.
-
-Read [`docs/product/overview.md`](docs/product/overview.md) before starting
-any feature work. It defines goals, non-goals, and success criteria.
-
----
-
-## Architecture
+A thin e-ink display client. The hot path is ~30 lines:
 
 ```
-config → sources → domain → presentation → render ──→ display (SPI)
-                                                   ↘
-                                                    web (preview + config UI)
+fetch image_url → decode PNG → 1-bit pack → push to display → sleep → repeat
 ```
 
-Full design: [`docs/architecture/overview.md`](docs/architecture/overview.md)
+Data fetching, layout, and rendering all happen upstream in a separate
+service (the `cascades` project). This binary's job is to put pixels on the
+panel and survive flaky networks.
 
-Key invariants:
-- Data flows **one direction**: sources → domain → presentation → render → output
-- Sources **never** call presentation or render code
-- The `web` layer reuses the render pipeline — it does not have its own renderer
-- Each source implements the `Source` trait; adding a source means adding a module, not changing the core
+## Module layout
 
----
+| Path                | Responsibility                                       |
+|---------------------|------------------------------------------------------|
+| `src/main.rs`       | Parse args, load config, hand off to `app::run`      |
+| `src/app/mod.rs`    | Fetch loop and `AppOptions` parsing                  |
+| `src/config/mod.rs` | TOML schema (`[device]`, `[display]`)                |
+| `src/display/`      | `DisplayDriver` trait, `NullDisplay`, Waveshare SPI  |
+| `src/render/`       | `PixelBuffer` (1-bit, packed)                        |
 
-## Working in this repo
+## What not to add
 
-### Before writing code
+- **No web UI.** Configuration is via `config.toml` + restart. The upstream
+  service owns everything user-facing.
+- **No data sources.** No NOAA, USGS, ferries, weather APIs. Those belong
+  upstream. If the display needs new info, add it server-side.
+- **No rendering logic.** No fonts, layout, panels, sparklines. The fetched
+  PNG is the whole picture — we just decode and forward bytes.
+- **No async runtime.** The whole binary is a blocking single-threaded loop.
+  Don't pull in tokio.
 
-1. Check `docs/product/overview.md` — understand what's in scope
-2. Check `docs/architecture/overview.md` — understand where your change fits
-3. Check `bd ready` for existing issues before creating new ones
+## Display constraints
 
-### Running locally without hardware
+- **800×480, 1-bit.** Size mismatch fails the Waveshare driver hard.
+- Full refresh (~2s) is the only mode in use right now. Partial refresh
+  exists in the trait but isn't wired up to the loop.
+- The driver inverts and sends both DTM1 (old frame) and DTM2 (new frame)
+  per refresh — see `src/display/waveshare.rs` for command sequencing.
 
-Use `--no-hardware` (or `SKAGIT_NO_HARDWARE=1`) to disable the SPI display
-driver. The web preview is the only output. A `docker compose up` at the repo
-root starts the full stack on port 8080.
+## Cross-compilation
 
-Set `SKAGIT_FIXTURE_DATA=1` to use static fixture responses instead of live
-API calls — useful for UI work and CI.
+Target `aarch64-unknown-linux-gnu` via `cargo zigbuild`. The `rppal` crate
+fails to build on macOS (Linux-only termios) — that's expected and not a
+regression. Use `cargo check` for default builds and `cargo zigbuild
+--features hardware` (or build on the Pi) to validate the hardware path.
 
-### Web framework: axum
+Avoid native C dependencies — they make the cross-compile setup brittle.
 
-The `web` layer uses **axum**. When adding endpoints:
-- Define handler functions with typed axum extractors (`Json<T>`, `Path<T>`, `State<T>`)
-- Register routes in the axum `Router` in `src/web/mod.rs`
-- Shared state is passed via `axum::extract::State` — do not use global statics
-- The tokio runtime is started once in `app`; do not start additional runtimes
+## Testing
 
-### Configuration files
+- Unit tests live alongside the code.
+- `tests/hardware_tests.rs` is gated behind both the `hardware` feature
+  and `SKAGIT_HARDWARE_TESTS=1`. Run on a Pi with the panel connected.
+- No integration tests — the upstream contract is just "GET returns
+  image/png", which is trivial enough to smoke-test by hand.
 
-| File | Purpose | Who writes it |
-|------|---------|--------------|
-| `config.toml` | Hardware, display geometry, location, source intervals | Human/agent only — never written at runtime |
-| `destinations.toml` | Destinations and go/no-go criteria | Web UI (`POST /destinations`) and human/agent editing |
+## Error handling
 
-When adding destination or criteria logic, edit `destinations.toml` schema and
-the `DestinationsConfig` struct in `src/config/mod.rs`. Do not add destination
-fields to `config.toml`.
-
-### Source trait
-
-Every data source must implement the `Source` trait (defined in `src/sources/mod.rs`).
-A source:
-- Has a name and a refresh interval
-- Fetches data and returns a `Result<DataPoint, SourceError>`
-- Handles its own retry/backoff — the scheduler does not retry on your behalf
-- Must not panic; return `Err` instead
-
-### Error handling
-
-- Use `Result` everywhere. No `.unwrap()` in production paths.
-- Source errors are logged and the previous value is kept on the display — stale
-  data is acceptable, crashes are not.
-- Network timeouts must be explicit; never block a thread indefinitely.
-
-### Display constraints
-
-- The Waveshare 7.5 inch panel is **800×480, 1-bit** (black/white only)
-- No antialiasing. Font choice and size matter — test readability at small sizes
-- Full refresh (~2s) clears ghosting; partial refresh (~0.3s) repaints a region
-- Prefer partial refresh; schedule full refresh hourly via the app layer
-
-### Web interface
-
-- Served on the local network only — no authentication required, but also no
-  external exposure assumed
-- Must render the same `PixelBuffer` used by the display driver — do not build
-  a separate preview renderer
-- Config writes go to `config.toml`; the daemon reloads on change (SIGHUP or
-  file watcher, TBD)
-
-### Testing
-
-- Unit test source parsing logic against fixture responses (not live API calls)
-- Integration tests that hit real APIs are opt-in and must be gated behind a
-  feature flag or environment variable
-- The render pipeline should be testable by comparing pixel buffers to golden
-  files
-
-### Cross-compilation
-
-Target: `aarch64-unknown-linux-gnu`
-
-```sh
-cargo build --release --target aarch64-unknown-linux-gnu
-```
-
-Do not introduce dependencies that require native C libraries unless
-absolutely necessary — cross-compilation becomes significantly harder.
-
----
-
-## What not to do
-
-- Do not add a source by modifying the core scheduler or render loop — use the
-  `Source` trait
-- Do not add authentication or cloud sync — these are explicit non-goals
-- Do not put trip evaluation logic in `presentation` or `sources` — it belongs
-  in the `evaluation` layer, which takes `TripCriteria` + domain state and returns
-  a `TripDecision`
-- Do not add forecast data — current conditions only
-- Do not use `unwrap()` or `expect()` in any path that runs on the Pi
-- Do not introduce async runtimes (Tokio, async-std) without discussing first —
-  the current design uses threads and channels intentionally
-- Do not create a separate renderer for the web preview — reuse the render pipeline
-
----
-
-## Open questions (as of initial design)
-
-- Trail/campsite data source: WTA, Recreation.gov, and USFS have no unified API.
-  The approach is TBD — a spike is required before implementation.
-- Road closure coverage: WSDOT covers state roads; USFS and county road APIs
-  have inconsistent coverage. Approach TBD.
-- Font: embedded bitmap vs. runtime loaded — not yet decided.
-- Partial refresh granularity: per-panel vs. full buffer — not yet decided.
-
----
-
-## References
-
-- Product overview: `docs/product/overview.md`
-- Architecture: `docs/architecture/overview.md`
-- Sample config: `config.sample.toml`
-- Waveshare 7.5" v2 datasheet: in `docs/hardware/` (TBD)
+- A failed fetch logs and retries on the next tick. Last successful frame
+  stays on the display.
+- Network calls have an explicit 10s timeout — never block forever.
+- No `unwrap()`/`expect()` in `app::run` or below.
